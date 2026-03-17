@@ -1,3 +1,4 @@
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.random.Random
 
@@ -129,6 +130,38 @@ data object Noise {
 
 		return 32.0 * (n0 + n1 + n2 + n3)
 	}
+
+	/**
+	 * Ridged fractal noise (sharp mountain peaks).
+	 */
+	fun ridged(
+		x: Double,
+		y: Double = 0.0,
+		z: Double = 0.0,
+		octaves: Int = 4,
+		persistence: Double = 0.5,
+		lacunarity: Double = 2.0
+	): Double {
+		var total = 0.0
+		var frequency = 1.0
+		var amplitude = 1.0
+		var maxValue = 0.0
+		for (i in 0 until octaves) {
+			var v = noise(x * frequency, y * frequency, z * frequency)
+			v = 1.0 - abs(v)
+			v *= v // Sharpen peaks
+			total += v * amplitude
+			maxValue += amplitude
+			amplitude *= persistence
+			frequency *= lacunarity
+		}
+		return total / maxValue
+	}
+
+	/**
+	 * Linear interpolation between two values.
+	 */
+	fun lerp(a: Double, b: Double, t: Double): Double = a + t * (b - a)
 
 	/**
 	 * Generates fractal noise (Multiple octaves of Simplex noise).

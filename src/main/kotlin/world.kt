@@ -13,7 +13,7 @@ data class WorldConfig(
 	val chunkSize: Int = 16,
 	val worldWidth: Int = 16,   // Width in chunks (16 * 16 = 256 blocks)
 	val worldDepth: Int = 16,   // Depth in chunks (16 * 16 = 256 blocks)
-	val worldHeight: Int = 8,  // Height in chunks (8 * 16 = 128 blocks)
+	val worldHeight: Int = 24,  // Height in chunks (24 * 16 = 384 blocks)
 	val seed: Long = Random.nextLong(),
 	val stoneBlockId: Int = 2,
 	val grassBlockId: Int = 0,
@@ -61,11 +61,59 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 				val worldX = startX + lx
 				val worldZ = startZ + lz
 
-				val noiseValue = Noise.fractal(
-					worldX.toDouble() / 150.0,
-					worldZ.toDouble() / 150.0
-				)
-				val surfaceY = (seaLevel + noiseValue * (seaLevel / 2)).toInt()
+				// Apply light warp to break linear noise artifacts and "low poly" look
+				val wx = Noise.noise(worldX / 120.0, worldZ / 120.0) * 15.0
+				val wz = Noise.noise(worldZ / 120.0, worldX / 120.0 + 100.0) * 15.0
+				val tx = worldX + wx
+				val tz = worldZ + wz
+
+				// Selector noise to choose between biomes (plains vs mountains)
+				val selector = Noise.fractal(
+					tx / 1200.0,
+					tz / 1200.0,
+					octaves = 2
+				) * 0.5 + 0.5 // Range [0.0, 1.0]
+
+				// Large global variation
+				val globalVariation = Noise.fractal(
+					tx / 3000.0,
+					tz / 3000.0,
+					octaves = 1
+				) * 0.25
+
+				// Base plains terrain (flat but slightly uneven)
+				val plainsBase = Noise.fractal(
+					tx / 400.0,
+					tz / 400.0
+				) * 0.15 + 0.1
+
+				// Ridged mountains (steep hills)
+				val mountainsBase = Noise.ridged(
+					tx / 800.0,
+					tz / 800.0,
+					octaves = 6,
+					persistence = 0.45
+				) * 1.55 - 0.1 // Plus de hauteur possible
+
+				// Combine them based on selector
+				// If selector is high, we have more mountains
+				var combinedNoise = if (selector < 0.2) {
+					plainsBase
+				} else if (selector > 0.6) {
+					mountainsBase
+				} else {
+					// Smooth transition
+					var t = (selector - 0.2) / 0.4
+					t = t * t * (3.0 - 2.0 * t) // Smoothstep
+					Noise.lerp(plainsBase, mountainsBase, t)
+				}
+
+				// Add global variation and fine detail noise
+				combinedNoise += globalVariation
+				combinedNoise += Noise.fractal(tx / 40.0, tz / 40.0, octaves = 2) * 0.04
+
+				val surfaceY = (seaLevel + combinedNoise * (seaLevel * 0.56)).toInt()
+					.coerceIn(0, config.worldHeight * config.chunkSize - 1)
 
 				for (ly in 0..<config.chunkSize) {
 					val worldY = startY + ly
