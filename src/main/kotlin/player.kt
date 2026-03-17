@@ -13,6 +13,7 @@ class Player(val world: World) {
 	val position = MutableVec3f()
 	val velocity = MutableVec3f()
 	var onGround = false
+	var physicsEnabled = false
 
 	init {
 		respawn()
@@ -21,9 +22,9 @@ class Player(val world: World) {
 	var yaw = 0f
 	var pitch = 0f
 
-	val height = 4f
-	val width = 2f
-	val depth = 2f
+	val height = 3.8f
+	val width = 1.9f
+	val depth = 1.9f
 
 	val walkSpeed = 10f
 	val jumpSpeed = 12f
@@ -43,6 +44,8 @@ class Player(val world: World) {
 	}
 
 	fun update(dt: Float) {
+		if (!physicsEnabled) return
+
 		// Apply gravity
 		velocity.y -= gravity * dt
 		if (velocity.y < -50f) velocity.y = -50f // Terminal velocity
@@ -106,10 +109,10 @@ class Player(val world: World) {
 	}
 
 	fun respawn() {
-		val centerX = (world.config.worldWidth * world.config.chunkSize) / 2f
-		val centerZ = (world.config.worldDepth * world.config.chunkSize) / 2f
-		val centerY = (world.config.worldHeight * world.config.chunkSize).toFloat()
-		position.set(centerX, centerY, centerZ)
+		val centerX = (world.config.worldWidth * world.config.chunkSize) / 2
+		val centerZ = (world.config.worldDepth * world.config.chunkSize) / 2
+		val highestY = world.getHighestBlockY(centerX, centerZ)
+		position.set(centerX.toFloat() + 0.5f, highestY.toFloat() + 1.1f, centerZ.toFloat() + 0.5f)
 		velocity.set(0f, 0f, 0f)
 		yaw = 0f
 		pitch = 0f

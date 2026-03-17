@@ -1,4 +1,5 @@
 import de.fabmax.kool.math.Vec3f
+import de.fabmax.kool.math.Vec3i
 import de.fabmax.kool.math.deg
 import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.modules.ksl.blocks.mvpMatrix
@@ -7,11 +8,14 @@ import de.fabmax.kool.pipeline.Attribute
 import de.fabmax.kool.pipeline.CullMethod
 import de.fabmax.kool.pipeline.DepthCompareOp
 import de.fabmax.kool.pipeline.GpuType
-import de.fabmax.kool.scene.Node
-import de.fabmax.kool.scene.addMesh
+import de.fabmax.kool.scene.Mesh
 import de.fabmax.kool.util.Color
 import de.fabmax.kool.util.MemoryLayout
 import de.fabmax.kool.util.Struct
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
 
 val ATTRIBUTE_TEX_INDEX = Attribute("aTexIndex", GpuType.Float1)
 
@@ -29,27 +33,35 @@ class VoxelLayout : Struct("VoxelLayout", MemoryLayout.TightlyPacked) {
 val VOXEL_LAYOUT = VoxelLayout()
 
 /**
- * Adds the voxel world meshes to the given Node.
+ * Generates voxel world meshes.
  * Meshes are generated per 3D chunk for better performance and frustum culling.
  */
 @OptIn(ExperimentalUnsignedTypes::class)
-fun Node.addVoxelWorld(world: World, voxelShader: KslShader) {
-	world.chunks.values.forEach { chunk ->
-		val chunkSize = world.config.chunkSize
+suspend fun generateWorldMeshes(
+	world: World,
+	voxelShader: KslShader,
+	centerX: Float = 0f,
+	centerZ: Float = 0f
+): List<Mesh<*>> = withContext(Dispatchers.Default) {
+	val worldChunks = world.chunks
+	val chunkSize = world.config.chunkSize
 
-		// Check if chunk is empty before adding a mesh
-		var isEmpty = true
-		for (i in chunk.blocks.indices) {
-			if (chunk.blocks[i] != 255u.toUByte()) {
-				isEmpty = false
-				break
-			}
-		}
-		if (isEmpty) return@forEach
+	val columns = worldChunks.values.groupBy { it.cx to it.cz }
 
-		addMesh(VOXEL_LAYOUT) {
-			shader = voxelShader
-			generate {
+	val sortedColumnKeys = columns.keys.sortedBy { (cx, cz) ->
+		val dx = (cx + 0.5f) * chunkSize - centerX
+		val dz = (cz + 0.5f) * chunkSize - centerZ
+		dx * dx + dz * dz
+	}
+
+	sortedColumnKeys.map { key ->
+		async {
+			val columnChunks = columns[key] ?: return@async null
+			if (columnChunks.all { it.isEmpty }) return@async null
+
+			val mesh = Mesh(VOXEL_LAYOUT)
+			mesh.shader = voxelShader
+			mesh.generate {
 				/**
 				 * Helper to draw a single quad face with specific texture and shading.
 				 */
@@ -61,73 +73,118 @@ fun Node.addVoxelWorld(world: World, voxelShader: KslShader) {
 					}
 					withTransform {
 						transform()
-						// Standard 1x1 quad centered at origin (XY plane).
-						// Normal is +Z by default.
 						rect {
 							size.set(1f, 1f)
 						}
 					}
 				}
 
-				for (lx in 0..<chunkSize) {
-					for (ly in 0..<chunkSize) {
-						for (lz in 0..<chunkSize) {
-							val id = chunk.getBlock(lx, ly, lz)
-							if (id == -1) continue
+				columnChunks.forEach { chunk ->
+					if (chunk.isEmpty) return@forEach
 
-							val block = BLOCKS[id]
-							val wx = chunk.cx * chunkSize + lx
-							val wy = chunk.cy * chunkSize + ly
-							val wz = chunk.cz * chunkSize + lz
+					val nx = worldChunks[Vec3i(chunk.cx - 1, chunk.cy, chunk.cz)]
+					val px = worldChunks[Vec3i(chunk.cx + 1, chunk.cy, chunk.cz)]
+					val ny = worldChunks[Vec3i(chunk.cx, chunk.cy - 1, chunk.cz)]
+					val py = worldChunks[Vec3i(chunk.cx, chunk.cy + 1, chunk.cz)]
+					val nz = worldChunks[Vec3i(chunk.cx, chunk.cy, chunk.cz - 1)]
+					val pz = worldChunks[Vec3i(chunk.cx, chunk.cy, chunk.cz + 1)]
 
-							val x = wx.toFloat()
-							val y = wy.toFloat()
-							val z = wz.toFloat()
+					for (lx in 0..<chunkSize) {
+						for (ly in 0..<chunkSize) {
+							for (lz in 0..<chunkSize) {
+								val id = chunk.getBlock(lx, ly, lz)
+								if (id == -1) continue
 
-							// Top face (+Y)
-							if (world.getBlockIdAt(wx, wy + 1, wz) == -1) {
-								drawFace(block.topTexture, 1.0f) {
-									translate(x + 0.5f, y + 1.0f, z + 0.5f)
-									rotate((-90f).deg, Vec3f.X_AXIS)
+								val block = BLOCKS[id]
+								val wx = chunk.cx * chunkSize + lx
+								val wy = chunk.cy * chunkSize + ly
+								val wz = chunk.cz * chunkSize + lz
+
+								val x = wx.toFloat()
+								val y = wy.toFloat()
+								val z = wz.toFloat()
+
+								// Top face (+Y)
+								val isTopVisible = if (ly < chunkSize - 1) {
+									chunk.getBlock(lx, ly + 1, lz) == -1
+								} else {
+									(py?.getBlock(lx, 0, lz) ?: -1) == -1
 								}
-							}
-							// Bottom face (-Y)
-							if (world.getBlockIdAt(wx, wy - 1, wz) == -1) {
-								drawFace(block.bottomTexture, 0.5f) {
-									translate(x + 0.5f, y, z + 0.5f)
-									rotate(90f.deg, Vec3f.X_AXIS)
+								if (isTopVisible) {
+									drawFace(block.topTexture, 1.0f) {
+										translate(x + 0.5f, y + 1.0f, z + 0.5f)
+										rotate((-90f).deg, Vec3f.X_AXIS)
+									}
 								}
-							}
-							// Side faces (+X, -X, +Z, -Z)
-							if (world.getBlockIdAt(wx + 1, wy, wz) == -1) {
-								drawFace(block.xSideTexture, 0.8f) {
-									translate(x + 1.0f, y + 0.5f, z + 0.5f)
-									rotate(90f.deg, Vec3f.Y_AXIS)
+
+								// Bottom face (-Y)
+								val isBottomVisible = if (ly > 0) {
+									chunk.getBlock(lx, ly - 1, lz) == -1
+								} else {
+									(ny?.getBlock(lx, chunkSize - 1, lz) ?: -1) == -1
 								}
-							}
-							if (world.getBlockIdAt(wx - 1, wy, wz) == -1) {
-								drawFace(block.xSideTexture, 0.8f) {
-									translate(x, y + 0.5f, z + 0.5f)
-									rotate((-90f).deg, Vec3f.Y_AXIS)
+								if (isBottomVisible) {
+									drawFace(block.bottomTexture, 0.5f) {
+										translate(x + 0.5f, y, z + 0.5f)
+										rotate(90f.deg, Vec3f.X_AXIS)
+									}
 								}
-							}
-							if (world.getBlockIdAt(wx, wy, wz + 1) == -1) {
-								drawFace(block.zSideTexture, 0.75f) {
-									translate(x + 0.5f, y + 0.5f, z + 1.0f)
+
+								// Side faces (+X, -X, +Z, -Z)
+								val isPXVisible = if (lx < chunkSize - 1) {
+									chunk.getBlock(lx + 1, ly, lz) == -1
+								} else {
+									(px?.getBlock(0, ly, lz) ?: -1) == -1
 								}
-							}
-							if (world.getBlockIdAt(wx, wy, wz - 1) == -1) {
-								drawFace(block.zSideTexture, 0.75f) {
-									translate(x + 0.5f, y + 0.5f, z)
-									rotate(180f.deg, Vec3f.Y_AXIS)
+								if (isPXVisible) {
+									drawFace(block.xSideTexture, 0.8f) {
+										translate(x + 1.0f, y + 0.5f, z + 0.5f)
+										rotate(90f.deg, Vec3f.Y_AXIS)
+									}
+								}
+
+								val isNXVisible = if (lx > 0) {
+									chunk.getBlock(lx - 1, ly, lz) == -1
+								} else {
+									(nx?.getBlock(chunkSize - 1, ly, lz) ?: -1) == -1
+								}
+								if (isNXVisible) {
+									drawFace(block.xSideTexture, 0.8f) {
+										translate(x, y + 0.5f, z + 0.5f)
+										rotate((-90f).deg, Vec3f.Y_AXIS)
+									}
+								}
+
+								val isPZVisible = if (lz < chunkSize - 1) {
+									chunk.getBlock(lx, ly, lz + 1) == -1
+								} else {
+									(pz?.getBlock(lx, ly, 0) ?: -1) == -1
+								}
+								if (isPZVisible) {
+									drawFace(block.zSideTexture, 0.75f) {
+										translate(x + 0.5f, y + 0.5f, z + 1.0f)
+									}
+								}
+
+								val isNZVisible = if (lz > 0) {
+									chunk.getBlock(lx, ly, lz - 1) == -1
+								} else {
+									(nz?.getBlock(lx, ly, chunkSize - 1) ?: -1) == -1
+								}
+								if (isNZVisible) {
+									drawFace(block.zSideTexture, 0.75f) {
+										translate(x + 0.5f, y + 0.5f, z)
+										rotate(180f.deg, Vec3f.Y_AXIS)
+									}
 								}
 							}
 						}
 					}
 				}
 			}
+			mesh
 		}
-	}
+	}.awaitAll().filterNotNull()
 }
 
 /**

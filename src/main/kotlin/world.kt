@@ -1,4 +1,8 @@
 import de.fabmax.kool.math.Vec3i
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
@@ -32,11 +36,14 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 	// Stores all solid blocks in this chunk.
 	// 255 represents air (no block).
 	val blocks = UByteArray(config.chunkSize * config.chunkSize * config.chunkSize) { 255u }
+	var isEmpty = true
+		private set
 
 	private fun getIndex(lx: Int, ly: Int, lz: Int) = (lx * config.chunkSize + ly) * config.chunkSize + lz
 
 	fun setBlock(lx: Int, ly: Int, lz: Int, id: Int) {
 		blocks[getIndex(lx, ly, lz)] = id.toUByte()
+		if (id != -1) isEmpty = false
 	}
 
 	fun getBlock(lx: Int, ly: Int, lz: Int): Int {
@@ -79,20 +86,39 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 data class World(var config: WorldConfig) {
 	// Map keyed by chunk coordinates (cx, cy, cz).
 	val chunks = ConcurrentHashMap<Vec3i, Chunk>()
+	var isGenerating = false
 
-	fun generateAll() {
+	suspend fun generateAll() = withContext(Dispatchers.Default) {
+		isGenerating = true
 		Noise.setSeed(config.seed)
 		chunks.clear()
 		val seaLevel = (config.worldHeight * config.chunkSize) / 2
+
+		val centerX = config.worldWidth / 2
+		val centerZ = config.worldDepth / 2
+
+		val coords = mutableListOf<Pair<Int, Int>>()
 		for (cx in 0..<config.worldWidth) {
-			for (cy in 0..<config.worldHeight) {
-				for (cz in 0..<config.worldDepth) {
+			for (cz in 0..<config.worldDepth) {
+				coords.add(cx to cz)
+			}
+		}
+		coords.sortBy { (cx, cz) ->
+			val dx = cx - centerX
+			val dz = cz - centerZ
+			dx * dx + dz * dz
+		}
+
+		coords.map { (cx, cz) ->
+			async {
+				for (cy in 0..<config.worldHeight) {
 					val chunk = Chunk(cx, cy, cz, config)
 					chunk.generate(seaLevel)
 					chunks[Vec3i(cx, cy, cz)] = chunk
 				}
 			}
-		}
+		}.awaitAll()
+		isGenerating = false
 	}
 
 	fun getBlockIdAt(x: Int, y: Int, z: Int): Int {
@@ -111,5 +137,20 @@ data class World(var config: WorldConfig) {
 	fun getBlockAt(x: Int, y: Int, z: Int): BlockInstance? {
 		val id = getBlockIdAt(x, y, z)
 		return if (id == -1) null else BlockInstance(x, y, z, id)
+	}
+
+	fun getHighestBlockY(x: Int, z: Int, range: Int = 1): Int {
+		var maxY = 0
+		for (ix in (x - range)..(x + range)) {
+			for (iz in (z - range)..(z + range)) {
+				for (y in (config.worldHeight * config.chunkSize - 1) downTo 0) {
+					if (getBlockIdAt(ix, y, iz) != -1) {
+						if (y > maxY) maxY = y
+						break
+					}
+				}
+			}
+		}
+		return maxY
 	}
 }
