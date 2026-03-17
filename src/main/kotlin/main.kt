@@ -5,7 +5,6 @@ import de.fabmax.kool.input.KeyboardInput
 import de.fabmax.kool.input.LocalKeyCode
 import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.pipeline.ClearColorFill
-import de.fabmax.kool.pipeline.Texture3d
 import de.fabmax.kool.scene.Node
 import de.fabmax.kool.scene.defaultOrbitCamera
 import de.fabmax.kool.util.BackendScope
@@ -18,7 +17,7 @@ fun main() = KoolApplication(
 	config = KoolConfigJvm()
 ) {
 	// Initialize world with default configuration.
-	val world = World(WorldConfig())
+	val world = World(WorldConfig(width = 32, height = 10))
 	world.generateAll()
 
 	addScene {
@@ -29,7 +28,6 @@ fun main() = KoolApplication(
 		val worldNode = Node()
 		addNode(worldNode)
 		var voxelShader: KslShader? = null
-		var texArray: Texture3d? = null
 
 		/**
 		 * Clears existing world meshes and rebuilds them. 
@@ -44,7 +42,6 @@ fun main() = KoolApplication(
 		// Asynchronous loading of textures and shader initialization.
 		CoroutineScope(BackendScope.job).launch {
 			val loadedTex = buildTextureArray(File("src/main/resources/blocks"))
-			texArray = loadedTex
 
 			val shader = createVoxelShader().apply {
 				texture3d("tBlockArray", loadedTex)

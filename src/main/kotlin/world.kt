@@ -13,7 +13,14 @@ data class WorldConfig(
 	val stoneBlockId: Int = 2,
 	val grassBlockId: Int = 0,
 	val dirtBlockId: Int = 1,
-)
+) {
+	constructor(width: Int, height: Int, seed: Long = Random.nextLong()) : this(
+		worldWidth = width,
+		worldDepth = width,
+		worldHeight = height,
+		seed = seed,
+	)
+}
 
 /**
  * A Chunk represents a 16x16x16 cube of blocks.
@@ -47,8 +54,8 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 				val worldZ = startZ + lz
 
 				val noiseValue = Noise.fractal(
-					worldX.toDouble() / 100.0,
-					worldZ.toDouble() / 100.0
+					worldX.toDouble() / 150.0,
+					worldZ.toDouble() / 150.0
 				)
 				val surfaceY = (seaLevel + noiseValue * (seaLevel / 2)).toInt()
 
