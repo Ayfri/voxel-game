@@ -29,6 +29,7 @@ fun main() = KoolApplication(
 	val world = World(WorldConfig(width = 128, height = 24))
 	val cursorTexture = mutableStateOf<Texture2d?>(null)
 	val fpsText = mutableStateOf("FPS: --")
+	val meshesText = mutableStateOf("Meshes: --")
 	val noclipText = mutableStateOf("")
 	val hudFont = mutableStateOf<Font?>(null)
 
@@ -252,7 +253,12 @@ fun main() = KoolApplication(
 
 		onUpdate += {
 			if (Time.frameCount % 20 == 0) {
+				val totalMeshes = worldNode.children.filterIsInstance<Mesh<*>>().size
+				val visibleMeshes = worldNode.children.filterIsInstance<Mesh<*>>().count {
+					camera.isInFrustum(it)
+				}
 				fpsText.set("FPS: ${Time.fps.toInt()}")
+				meshesText.set("Meshes: $visibleMeshes / $totalMeshes")
 				if (player.isNoclip) {
 					noclipText.set("NOCLIP (Speed: ${player.noclipSpeed.toInt()})")
 				} else {
@@ -270,13 +276,14 @@ fun main() = KoolApplication(
 				.size(Grow.Std, Grow.Std)
 				.background(null)
 
-			renderHud(fpsText, noclipText, hudFont, cursorTexture)
+			renderHud(fpsText, meshesText, noclipText, hudFont, cursorTexture)
 		})
 	}
 }
 
 private fun UiScope.renderHud(
 	fpsText: MutableStateValue<String>,
+	meshesText: MutableStateValue<String>,
 	noclipText: MutableStateValue<String>,
 	hudFont: MutableStateValue<Font?>,
 	cursorTexture: MutableStateValue<Texture2d?>
@@ -287,6 +294,17 @@ private fun UiScope.renderHud(
 			.margin(top = 8.dp, start = 8.dp)
 
 		Text(fpsText.use()) {
+			val font = hudFont.use() ?: sizes.smallText
+			modifier
+				.textColor(Color.WHITE)
+				.font(font)
+				.height(50.dp)
+				.padding(horizontal = 8.dp)
+				.textAlignX(AlignmentX.Start)
+				.textAlignY(AlignmentY.Center)
+		}
+
+		Text(meshesText.use()) {
 			val font = hudFont.use() ?: sizes.smallText
 			modifier
 				.textColor(Color.WHITE)

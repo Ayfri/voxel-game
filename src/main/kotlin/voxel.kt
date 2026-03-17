@@ -84,6 +84,7 @@ fun generateColumnMesh(
 
 	val mesh = Mesh(VOXEL_LAYOUT)
 	mesh.shader = voxelShader
+	mesh.isFrustumChecked = true
 	val mask = IntArray(chunkSize * chunkSize)
 	mesh.generate {
 		columnChunks.forEach { chunk ->
