@@ -136,7 +136,7 @@ fun main() = KoolApplication(
 
 			camera.position.set(
 				player.position.x,
-				player.position.y + 3.3f, // Head height
+				player.position.y + 3.3f + player.cameraYOffset, // Head height with smoothing
 				player.position.z
 			)
 

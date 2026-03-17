@@ -188,6 +188,19 @@ data class World(var config: WorldConfig) {
 		return chunks[Vec3i(cx, cy, cz)]?.getBlock(lx, ly, lz) ?: -1
 	}
 
+	fun setBlockIdAt(x: Int, y: Int, z: Int, id: Int) {
+		val cx = if (x >= 0) x / config.chunkSize else (x + 1) / config.chunkSize - 1
+		val cy = if (y >= 0) y / config.chunkSize else (y + 1) / config.chunkSize - 1
+		val cz = if (z >= 0) z / config.chunkSize else (z + 1) / config.chunkSize - 1
+
+		val lx = x - cx * config.chunkSize
+		val ly = y - cy * config.chunkSize
+		val lz = z - cz * config.chunkSize
+
+		val chunk = chunks.getOrPut(Vec3i(cx, cy, cz)) { Chunk(cx, cy, cz, config) }
+		chunk.setBlock(lx, ly, lz, id)
+	}
+
 	// For compatibility during transition, we keep getBlockAt but it will return a temporary BlockInstance
 	fun getBlockAt(x: Int, y: Int, z: Int): BlockInstance? {
 		val id = getBlockIdAt(x, y, z)

@@ -31,6 +31,9 @@ class Player(val world: World) {
 	val walkSpeed = 10f
 	val jumpSpeed = 16f
 	val gravity = 50f
+	val stepHeight = 1.1f
+	var cameraYOffset = 0f
+	val cameraYOffsetLerpSpeed = 10f
 
 	private val pressedKeys = mutableSetOf<Int>()
 
@@ -64,6 +67,16 @@ class Player(val world: World) {
 		// Movement with collision
 		move(velocity.x * dt, 0f, 0f)
 		move(0f, 0f, velocity.z * dt)
+
+		// Smooth camera height
+		if (cameraYOffset != 0f) {
+			val delta = cameraYOffsetLerpSpeed * dt
+			if (cameraYOffset > 0f) {
+				cameraYOffset = (cameraYOffset - delta).coerceAtLeast(0f)
+			} else {
+				cameraYOffset = (cameraYOffset + delta).coerceAtMost(0f)
+			}
+		}
 
 		val dy = velocity.y * dt
 		position.y += dy
@@ -158,19 +171,37 @@ class Player(val world: World) {
 		yaw = 0f
 		pitch = 0f
 		onGround = false
+		cameraYOffset = 0f
 	}
 
 	private fun move(dx: Float, dy: Float, dz: Float) {
+		val oldX = position.x
+		val oldY = position.y
+		val oldZ = position.z
+
 		position.x += dx
 		position.y += dy
 		position.z += dz
 
 		if (isColliding()) {
-			position.x -= dx
-			position.y -= dy
-			position.z -= dz
-			if (dx != 0f) velocity.x = 0f
-			if (dz != 0f) velocity.z = 0f
+			if (onGround && (dx != 0f || dz != 0f) && dy == 0f) {
+				position.y += stepHeight
+				if (isColliding()) {
+					position.x = oldX
+					position.y = oldY
+					position.z = oldZ
+					if (dx != 0f) velocity.x = 0f
+					if (dz != 0f) velocity.z = 0f
+				} else {
+					cameraYOffset -= stepHeight
+				}
+			} else {
+				position.x = oldX
+				position.y = oldY
+				position.z = oldZ
+				if (dx != 0f) velocity.x = 0f
+				if (dz != 0f) velocity.z = 0f
+			}
 		}
 	}
 
