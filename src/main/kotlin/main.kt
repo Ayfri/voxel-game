@@ -25,7 +25,7 @@ fun main() = KoolApplication(
 	config = KoolConfigJvm()
 ) {
 	// Initialize world with default configuration.
-	val world = World(WorldConfig(width = 32, height = 10))
+	val world = World(WorldConfig(width = 64, height = 10))
 	val cursorTexture = mutableStateOf<Texture2d?>(null)
 	val fpsText = mutableStateOf("FPS: --")
 	val hudFont = mutableStateOf<Font?>(null)
