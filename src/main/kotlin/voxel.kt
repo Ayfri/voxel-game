@@ -84,12 +84,12 @@ fun generateColumnMesh(
 
 	val mesh = Mesh(VOXEL_LAYOUT)
 	mesh.shader = voxelShader
+	val mask = IntArray(chunkSize * chunkSize)
 	mesh.generate {
 		columnChunks.forEach { chunk ->
 			if (chunk.isEmpty) return@forEach
 
 			// Greedy meshing algorithm implementation
-			val mask = IntArray(chunkSize * chunkSize)
 
 			// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
 			for (d in 0..5) {
@@ -98,14 +98,14 @@ fun generateColumnMesh(
 				val u = (axis + 1) % 3
 				val v = (axis + 2) % 3
 
-				val dir = IntArray(3)
-				dir[axis] = if (isBackFace) -1 else 1
+				val dx = if (axis == 0) (if (isBackFace) -1 else 1) else 0
+				val dy = if (axis == 1) (if (isBackFace) -1 else 1) else 0
+				val dz = if (axis == 2) (if (isBackFace) -1 else 1) else 0
 
-				val neighborOffset = Vec3i(dir[0], dir[1], dir[2])
 				val neighborChunk = worldChunks[Vec3i(
-					chunk.cx + neighborOffset.x,
-					chunk.cy + neighborOffset.y,
-					chunk.cz + neighborOffset.z
+					chunk.cx + dx,
+					chunk.cy + dy,
+					chunk.cz + dz
 				)]
 
 				for (slice in 0 until chunkSize) {
@@ -115,23 +115,36 @@ fun generateColumnMesh(
 					for (j in 0 until chunkSize) {
 						val rowOffset = j * chunkSize
 						for (i in 0 until chunkSize) {
-							val pos = IntArray(3)
-							pos[axis] = slice
-							pos[u] = i
-							pos[v] = j
+							val lx = when (axis) {
+								0 -> slice
+								1 -> j
+								else -> i
+							}
+							val ly = when (axis) {
+								0 -> i
+								1 -> slice
+								else -> j
+							}
+							val lz = when (axis) {
+								0 -> j
+								1 -> i
+								else -> slice
+							}
 
-							val blockId = chunk.getBlock(pos[0], pos[1], pos[2])
+							val blockId = chunk.getBlock(lx, ly, lz)
 							if (blockId != -1) {
-								// Check if adjacent block is empty (visible face)
-								val nextPos = IntArray(3) { pos[it] + dir[it] }
-								val isVisible = if (nextPos[axis] in 0 until chunkSize) {
-									chunk.getBlock(nextPos[0], nextPos[1], nextPos[2]) == -1
+								val nlx = lx + dx
+								val nly = ly + dy
+								val nlz = lz + dz
+
+								val isVisible =
+									if (nlx in 0 until chunkSize && nly in 0 until chunkSize && nlz in 0 until chunkSize) {
+										chunk.getBlock(nlx, nly, nlz) == -1
 								} else {
-									// Use local coordinates in neighbor chunk
-									val lx = (nextPos[0] + chunkSize) % chunkSize
-									val ly = (nextPos[1] + chunkSize) % chunkSize
-									val lz = (nextPos[2] + chunkSize) % chunkSize
-									(neighborChunk?.getBlock(lx, ly, lz) ?: -1) == -1
+										val nnlx = (nlx + chunkSize) % chunkSize
+										val nnly = (nly + chunkSize) % chunkSize
+										val nnlz = (nlz + chunkSize) % chunkSize
+										(neighborChunk?.getBlock(nnlx, nnly, nnlz) ?: -1) == -1
 								}
 
 								if (isVisible) {

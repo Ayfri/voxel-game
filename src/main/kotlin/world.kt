@@ -52,10 +52,12 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 		val startX = cx * config.chunkSize
 		val startY = cy * config.chunkSize
 		val startZ = cz * config.chunkSize
+		val chunkSize = config.chunkSize
+		val chunkSizeSq = chunkSize * chunkSize
 
-		for (lx in 0..<config.chunkSize) {
-			yield() // Allow other tasks (UI, etc.)
-			for (lz in 0..<config.chunkSize) {
+		for (lx in 0..<chunkSize) {
+			if (lx % 4 == 0) yield() // Allow other tasks (UI, etc.) but less often
+			for (lz in 0..<chunkSize) {
 				val worldX = startX + lx
 				val worldZ = startZ + lz
 
@@ -111,9 +113,10 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 				combinedNoise += Noise.fractal(tx / 40.0, tz / 40.0, octaves = 2) * 0.04
 
 				val surfaceY = (seaLevel + combinedNoise * (seaLevel * 0.56)).toInt()
-					.coerceIn(0, config.worldHeight * config.chunkSize - 1)
+					.coerceIn(0, config.worldHeight * chunkSize - 1)
 
-				for (ly in 0..<config.chunkSize) {
+				val baseIndex = lx * chunkSizeSq + lz
+				for (ly in 0..<chunkSize) {
 					val worldY = startY + ly
 					if (worldY <= surfaceY) {
 						val id = when {
@@ -121,7 +124,8 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 							worldY > surfaceY - 3 -> config.dirtBlockId
 							else -> config.stoneBlockId
 						}
-						setBlock(lx, ly, lz, id)
+						blocks[baseIndex + ly * chunkSize] = id.toUByte()
+						if (id != -1) isEmpty = false
 					}
 				}
 			}

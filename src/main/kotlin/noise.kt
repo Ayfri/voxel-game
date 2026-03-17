@@ -1,5 +1,4 @@
 import kotlin.math.abs
-import kotlin.math.floor
 import kotlin.random.Random
 
 /**
@@ -8,6 +7,7 @@ import kotlin.random.Random
 data object Noise {
 	private val permutation = IntArray(256)
 	private val p = IntArray(512)
+	private val pMod12 = IntArray(512)
 
 	/**
 	 * Sets the seed for noise generation. 
@@ -20,6 +20,8 @@ data object Noise {
 			permutation[i] = base[i]
 			p[i] = base[i]
 			p[i + 256] = base[i]
+			pMod12[i] = base[i] % 12
+			pMod12[i + 256] = base[i] % 12
 		}
 	}
 
@@ -28,13 +30,17 @@ data object Noise {
 		setSeed(0L)
 	}
 
-	private fun dot(g: IntArray, x: Double, y: Double, z: Double): Double = g[0] * x + g[1] * y + g[2] * z
+	private fun fastFloor(x: Double): Int {
+		val xi = x.toInt()
+		return if (x < xi) xi - 1 else xi
+	}
 
-	private val grad3 = arrayOf(
-		intArrayOf(1, 1, 0), intArrayOf(-1, 1, 0), intArrayOf(1, -1, 0), intArrayOf(-1, -1, 0),
-		intArrayOf(1, 0, 1), intArrayOf(-1, 0, 1), intArrayOf(1, 0, -1), intArrayOf(-1, 0, -1),
-		intArrayOf(0, 1, 1), intArrayOf(0, -1, 1), intArrayOf(0, 1, -1), intArrayOf(0, -1, -1)
-	)
+	private val grad3x = intArrayOf(1, -1, 1, -1, 1, -1, 1, -1, 0, 0, 0, 0)
+	private val grad3y = intArrayOf(1, 1, -1, -1, 0, 0, 0, 0, 1, -1, 1, -1)
+	private val grad3z = intArrayOf(0, 0, 0, 0, 1, 1, -1, -1, 1, 1, -1, -1)
+
+	private fun dot(gIdx: Int, x: Double, y: Double, z: Double): Double =
+		grad3x[gIdx] * x + grad3y[gIdx] * y + grad3z[gIdx] * z
 
 	private const val F3 = 1.0 / 3.0
 	private const val G3 = 1.0 / 6.0
@@ -51,9 +57,9 @@ data object Noise {
 		var n3: Double
 
 		val s = (x + y + z) * F3
-		val i = floor(x + s).toInt()
-		val j = floor(y + s).toInt()
-		val k = floor(z + s).toInt()
+		val i = fastFloor(x + s)
+		val j = fastFloor(y + s)
+		val k = fastFloor(z + s)
 		val t = (i + j + k) * G3
 		val X0 = i - t
 		val Y0 = j - t
@@ -104,28 +110,28 @@ data object Noise {
 		if (t0 < 0) n0 = 0.0
 		else {
 			t0 *= t0
-			n0 = t0 * t0 * dot(grad3[p[ii + p[jj + p[kk]]] % 12], x0, y0, z0)
+			n0 = t0 * t0 * dot(pMod12[ii + p[jj + p[kk]]], x0, y0, z0)
 		}
 
 		var t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1
 		if (t1 < 0) n1 = 0.0
 		else {
 			t1 *= t1
-			n1 = t1 * t1 * dot(grad3[p[ii + i1 + p[jj + j1 + p[kk + k1]]] % 12], x1, y1, z1)
+			n1 = t1 * t1 * dot(pMod12[ii + i1 + p[jj + j1 + p[kk + k1]]], x1, y1, z1)
 		}
 
 		var t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2
 		if (t2 < 0) n2 = 0.0
 		else {
 			t2 *= t2
-			n2 = t2 * t2 * dot(grad3[p[ii + i2 + p[jj + j2 + p[kk + k2]]] % 12], x2, y2, z2)
+			n2 = t2 * t2 * dot(pMod12[ii + i2 + p[jj + j2 + p[kk + k2]]], x2, y2, z2)
 		}
 
 		var t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3
 		if (t3 < 0) n3 = 0.0
 		else {
 			t3 *= t3
-			n3 = t3 * t3 * dot(grad3[p[ii + 1 + p[jj + 1 + p[kk + 1]]] % 12], x3, y3, z3)
+			n3 = t3 * t3 * dot(pMod12[ii + 1 + p[jj + 1 + p[kk + 1]]], x3, y3, z3)
 		}
 
 		return 32.0 * (n0 + n1 + n2 + n3)
