@@ -1,8 +1,5 @@
 import de.fabmax.kool.math.Vec3i
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
@@ -11,9 +8,9 @@ import kotlin.random.Random
  */
 data class WorldConfig(
 	val chunkSize: Int = 16,
-	val worldWidth: Int = 16,   // Width in chunks (16 * 16 = 256 blocks)
-	val worldDepth: Int = 16,   // Depth in chunks (16 * 16 = 256 blocks)
-	val worldHeight: Int = 24,  // Height in chunks (24 * 16 = 384 blocks)
+	val worldWidth: Int = 32,   // Width in chunks (32 * 16 = 512 blocks)
+	val worldDepth: Int = 32,   // Depth in chunks (32 * 16 = 512 blocks)
+	val worldHeight: Int = 16,  // Height in chunks (16 * 16 = 256 blocks)
 	val seed: Long = Random.nextLong(),
 	val stoneBlockId: Int = 2,
 	val grassBlockId: Int = 0,
@@ -51,12 +48,13 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 		return if (id == 255) -1 else id
 	}
 
-	fun generate(seaLevel: Int) {
+	suspend fun generate(seaLevel: Int) {
 		val startX = cx * config.chunkSize
 		val startY = cy * config.chunkSize
 		val startZ = cz * config.chunkSize
 
 		for (lx in 0..<config.chunkSize) {
+			yield() // Allow other tasks (UI, etc.)
 			for (lz in 0..<config.chunkSize) {
 				val worldX = startX + lx
 				val worldZ = startZ + lz
@@ -93,7 +91,7 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 					tz / 800.0,
 					octaves = 6,
 					persistence = 0.45
-				) * 1.55 - 0.1 // Plus de hauteur possible
+				) * 1.55 - 0.1 // More height possible
 
 				// Combine them based on selector
 				// If selector is high, we have more mountains
@@ -157,15 +155,22 @@ data class World(var config: WorldConfig) {
 			dx * dx + dz * dz
 		}
 
-		coords.map { (cx, cz) ->
-			async {
-				for (cy in 0..<config.worldHeight) {
-					val chunk = Chunk(cx, cy, cz, config)
-					chunk.generate(seaLevel)
-					chunks[Vec3i(cx, cy, cz)] = chunk
+		// Use a limited dispatcher to avoid saturating all cores
+		// and leave room for the UI/render thread.
+		val limitedDispatcher =
+			Dispatchers.Default.limitedParallelism(Runtime.getRuntime().availableProcessors().coerceAtLeast(2) - 1)
+
+		withContext(limitedDispatcher) {
+			coords.map { (cx, cz) ->
+				async {
+					for (cy in 0..<config.worldHeight) {
+						val chunk = Chunk(cx, cy, cz, config)
+						chunk.generate(seaLevel)
+						chunks[Vec3i(cx, cy, cz)] = chunk
+					}
 				}
-			}
-		}.awaitAll()
+			}.awaitAll()
+		}
 		isGenerating = false
 	}
 

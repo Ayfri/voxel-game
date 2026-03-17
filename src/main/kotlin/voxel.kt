@@ -1,3 +1,4 @@
+import de.fabmax.kool.math.Vec2f
 import de.fabmax.kool.math.Vec3f
 import de.fabmax.kool.math.Vec3i
 import de.fabmax.kool.math.deg
@@ -9,6 +10,7 @@ import de.fabmax.kool.pipeline.CullMethod
 import de.fabmax.kool.pipeline.DepthCompareOp
 import de.fabmax.kool.pipeline.GpuType
 import de.fabmax.kool.scene.Mesh
+import de.fabmax.kool.scene.geometry.MeshBuilder
 import de.fabmax.kool.util.Color
 import de.fabmax.kool.util.MemoryLayout
 import de.fabmax.kool.util.Struct
@@ -33,8 +35,9 @@ class VoxelLayout : Struct("VoxelLayout", MemoryLayout.TightlyPacked) {
 val VOXEL_LAYOUT = VoxelLayout()
 
 /**
- * Generates voxel world meshes.
- * Meshes are generated per 3D chunk for better performance and frustum culling.
+ * Generates voxel world meshes using Greedy Meshing algorithm.
+ * This significantly reduces the number of faces and vertices by merging adjacent
+ * faces with the same texture, allowing for much larger worlds with better performance.
  */
 @OptIn(ExperimentalUnsignedTypes::class)
 suspend fun generateWorldMeshes(
@@ -62,119 +65,105 @@ suspend fun generateWorldMeshes(
 			val mesh = Mesh(VOXEL_LAYOUT)
 			mesh.shader = voxelShader
 			mesh.generate {
-				/**
-				 * Helper to draw a single quad face with specific texture and shading.
-				 */
-				fun drawFace(textureName: String, shadeFactor: Float, transform: () -> Unit) {
-					val sliceIndex = TEXTURE_INDEX_MAP[textureName]?.toFloat() ?: 0f
-					color = Color(shadeFactor, shadeFactor, shadeFactor, 1f)
-					vertexCustomizer = { layout ->
-						set(layout.texIndex, sliceIndex)
-					}
-					withTransform {
-						transform()
-						rect {
-							size.set(1f, 1f)
-						}
-					}
-				}
-
 				columnChunks.forEach { chunk ->
 					if (chunk.isEmpty) return@forEach
 
-					val nx = worldChunks[Vec3i(chunk.cx - 1, chunk.cy, chunk.cz)]
-					val px = worldChunks[Vec3i(chunk.cx + 1, chunk.cy, chunk.cz)]
-					val ny = worldChunks[Vec3i(chunk.cx, chunk.cy - 1, chunk.cz)]
-					val py = worldChunks[Vec3i(chunk.cx, chunk.cy + 1, chunk.cz)]
-					val nz = worldChunks[Vec3i(chunk.cx, chunk.cy, chunk.cz - 1)]
-					val pz = worldChunks[Vec3i(chunk.cx, chunk.cy, chunk.cz + 1)]
+					// Greedy meshing algorithm implementation
+					val mask = IntArray(chunkSize * chunkSize)
 
-					for (lx in 0..<chunkSize) {
-						for (ly in 0..<chunkSize) {
-							for (lz in 0..<chunkSize) {
-								val id = chunk.getBlock(lx, ly, lz)
-								if (id == -1) continue
+					// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
+					for (d in 0..5) {
+						val axis = d / 2
+						val isBackFace = d % 2 == 1
+						val u = (axis + 1) % 3
+						val v = (axis + 2) % 3
 
-								val block = BLOCKS[id]
-								val wx = chunk.cx * chunkSize + lx
-								val wy = chunk.cy * chunkSize + ly
-								val wz = chunk.cz * chunkSize + lz
+						val dir = IntArray(3)
+						dir[axis] = if (isBackFace) -1 else 1
 
-								val x = wx.toFloat()
-								val y = wy.toFloat()
-								val z = wz.toFloat()
+						val neighborOffset = Vec3i(dir[0], dir[1], dir[2])
+						val neighborChunk = worldChunks[Vec3i(
+							chunk.cx + neighborOffset.x,
+							chunk.cy + neighborOffset.y,
+							chunk.cz + neighborOffset.z
+						)]
 
-								// Top face (+Y)
-								val isTopVisible = if (ly < chunkSize - 1) {
-									chunk.getBlock(lx, ly + 1, lz) == -1
-								} else {
-									(py?.getBlock(lx, 0, lz) ?: -1) == -1
-								}
-								if (isTopVisible) {
-									drawFace(block.topTexture, 1.0f) {
-										translate(x + 0.5f, y + 1.0f, z + 0.5f)
-										rotate((-90f).deg, Vec3f.X_AXIS)
+						for (slice in 0 until chunkSize) {
+							mask.fill(-1)
+
+							// 1. Fill visibility mask for this slice
+							for (j in 0 until chunkSize) {
+								val rowOffset = j * chunkSize
+								for (i in 0 until chunkSize) {
+									val pos = IntArray(3)
+									pos[axis] = slice
+									pos[u] = i
+									pos[v] = j
+
+									val blockId = chunk.getBlock(pos[0], pos[1], pos[2])
+									if (blockId != -1) {
+										// Check if adjacent block is empty (visible face)
+										val nextPos = IntArray(3) { pos[it] + dir[it] }
+										val isVisible = if (nextPos[axis] in 0 until chunkSize) {
+											chunk.getBlock(nextPos[0], nextPos[1], nextPos[2]) == -1
+										} else {
+											// Use local coordinates in neighbor chunk
+											val lx = (nextPos[0] + chunkSize) % chunkSize
+											val ly = (nextPos[1] + chunkSize) % chunkSize
+											val lz = (nextPos[2] + chunkSize) % chunkSize
+											(neighborChunk?.getBlock(lx, ly, lz) ?: -1) == -1
+										}
+
+										if (isVisible) {
+											val block = BLOCKS[blockId]
+											val texName = when (d) {
+												0, 1 -> block.xSideTexture
+												2 -> block.topTexture
+												3 -> block.bottomTexture
+												4, 5 -> block.zSideTexture
+												else -> ""
+											}
+											mask[i + rowOffset] = TEXTURE_INDEX_MAP[texName] ?: 0
+										}
 									}
 								}
+							}
 
-								// Bottom face (-Y)
-								val isBottomVisible = if (ly > 0) {
-									chunk.getBlock(lx, ly - 1, lz) == -1
-								} else {
-									(ny?.getBlock(lx, chunkSize - 1, lz) ?: -1) == -1
-								}
-								if (isBottomVisible) {
-									drawFace(block.bottomTexture, 0.5f) {
-										translate(x + 0.5f, y, z + 0.5f)
-										rotate(90f.deg, Vec3f.X_AXIS)
-									}
-								}
+							// 2. Perform greedy merging on the mask
+							for (j in 0 until chunkSize) {
+								var i = 0
+								while (i < chunkSize) {
+									val texIndex = mask[j * chunkSize + i]
+									if (texIndex != -1) {
+										// Find max width
+										var w = 1
+										while (i + w < chunkSize && mask[j * chunkSize + i + w] == texIndex) {
+											w++
+										}
 
-								// Side faces (+X, -X, +Z, -Z)
-								val isPXVisible = if (lx < chunkSize - 1) {
-									chunk.getBlock(lx + 1, ly, lz) == -1
-								} else {
-									(px?.getBlock(0, ly, lz) ?: -1) == -1
-								}
-								if (isPXVisible) {
-									drawFace(block.xSideTexture, 0.8f) {
-										translate(x + 1.0f, y + 0.5f, z + 0.5f)
-										rotate(90f.deg, Vec3f.Y_AXIS)
-									}
-								}
+										// Find max height for this width
+										var h = 1
+										outer@ while (j + h < chunkSize) {
+											val nextRowOffset = (j + h) * chunkSize
+											for (w_idx in 0 until w) {
+												if (mask[nextRowOffset + i + w_idx] != texIndex) break@outer
+											}
+											h++
+										}
 
-								val isNXVisible = if (lx > 0) {
-									chunk.getBlock(lx - 1, ly, lz) == -1
-								} else {
-									(nx?.getBlock(chunkSize - 1, ly, lz) ?: -1) == -1
-								}
-								if (isNXVisible) {
-									drawFace(block.xSideTexture, 0.8f) {
-										translate(x, y + 0.5f, z + 0.5f)
-										rotate((-90f).deg, Vec3f.Y_AXIS)
-									}
-								}
+										// Generate the merged quad
+										addGreedyFace(d, slice, i, j, w, h, texIndex, chunk)
 
-								val isPZVisible = if (lz < chunkSize - 1) {
-									chunk.getBlock(lx, ly, lz + 1) == -1
-								} else {
-									(pz?.getBlock(lx, ly, 0) ?: -1) == -1
-								}
-								if (isPZVisible) {
-									drawFace(block.zSideTexture, 0.75f) {
-										translate(x + 0.5f, y + 0.5f, z + 1.0f)
-									}
-								}
-
-								val isNZVisible = if (lz > 0) {
-									chunk.getBlock(lx, ly, lz - 1) == -1
-								} else {
-									(nz?.getBlock(lx, ly, chunkSize - 1) ?: -1) == -1
-								}
-								if (isNZVisible) {
-									drawFace(block.zSideTexture, 0.75f) {
-										translate(x + 0.5f, y + 0.5f, z)
-										rotate(180f.deg, Vec3f.Y_AXIS)
+										// Mark merged faces as processed
+										for (h_idx in 0 until h) {
+											val markRowOffset = (j + h_idx) * chunkSize
+											for (w_idx in 0 until w) {
+												mask[markRowOffset + i + w_idx] = -1
+											}
+										}
+										i += w
+									} else {
+										i++
 									}
 								}
 							}
@@ -185,6 +174,85 @@ suspend fun generateWorldMeshes(
 			mesh
 		}
 	}.awaitAll().filterNotNull()
+}
+
+/**
+ * Helper to add a merged quad with correct orientation and UV repetition.
+ */
+private fun MeshBuilder<VoxelLayout>.addGreedyFace(
+	d: Int,
+	slice: Int,
+	u: Int,
+	v: Int,
+	w: Int,
+	h: Int,
+	texIndex: Int,
+	chunk: Chunk
+) {
+	val chunkSize = chunk.config.chunkSize
+	val wx = (chunk.cx * chunkSize).toFloat()
+	val wy = (chunk.cy * chunkSize).toFloat()
+	val wz = (chunk.cz * chunkSize).toFloat()
+
+	val shade = when (d) {
+		0, 1 -> 0.8f
+		2 -> 1.0f
+		3 -> 0.5f
+		4, 5 -> 0.75f
+		else -> 1.0f
+	}
+	color = Color(shade, shade, shade, 1f)
+	vertexCustomizer = { layout -> set(layout.texIndex, texIndex.toFloat()) }
+
+	withTransform {
+		when (d) {
+			0 -> { // +X
+				translate(wx + slice + 1.0f, wy + u + w / 2.0f, wz + v + h / 2.0f)
+				rotate(90f.deg, Vec3f.Y_AXIS)
+				addTexturedRect(h.toFloat(), w.toFloat())
+			}
+
+			1 -> { // -X
+				translate(wx + slice, wy + u + w / 2.0f, wz + v + h / 2.0f)
+				rotate((-90f).deg, Vec3f.Y_AXIS)
+				addTexturedRect(h.toFloat(), w.toFloat())
+			}
+
+			2 -> { // +Y
+				translate(wx + v + h / 2.0f, wy + slice + 1.0f, wz + u + w / 2.0f)
+				rotate((-90f).deg, Vec3f.X_AXIS)
+				addTexturedRect(h.toFloat(), w.toFloat())
+			}
+
+			3 -> { // -Y
+				translate(wx + v + h / 2.0f, wy + slice, wz + u + w / 2.0f)
+				rotate(90f.deg, Vec3f.X_AXIS)
+				addTexturedRect(h.toFloat(), w.toFloat())
+			}
+
+			4 -> { // +Z
+				translate(wx + u + w / 2.0f, wy + v + h / 2.0f, wz + slice + 1.0f)
+				addTexturedRect(w.toFloat(), h.toFloat())
+			}
+
+			5 -> { // -Z
+				translate(wx + u + w / 2.0f, wy + v + h / 2.0f, wz + slice)
+				rotate(180f.deg, Vec3f.Y_AXIS)
+				addTexturedRect(w.toFloat(), h.toFloat())
+			}
+		}
+	}
+}
+
+/**
+ * Adds a rectangle to the geometry with specific width/height and repeated UVs.
+ */
+private fun MeshBuilder<VoxelLayout>.addTexturedRect(width: Float, height: Float) {
+	val i0 = vertex(Vec3f(-width / 2.0f, -height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(0f, height))
+	val i1 = vertex(Vec3f(width / 2.0f, -height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(width, height))
+	val i2 = vertex(Vec3f(width / 2.0f, height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(width, 0f))
+	val i3 = vertex(Vec3f(-width / 2.0f, height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(0f, 0f))
+	geometry.addIndices(i0, i1, i2, i0, i2, i3)
 }
 
 /**
