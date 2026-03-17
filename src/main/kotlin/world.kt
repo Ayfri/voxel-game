@@ -134,7 +134,8 @@ data class World(var config: WorldConfig) {
 	val chunks = ConcurrentHashMap<Vec3i, Chunk>()
 	var isGenerating = false
 
-	suspend fun generateAll() = withContext(Dispatchers.Default) {
+	suspend fun generateAll(onColumnGenerated: suspend (Int, Int) -> Unit = { _, _ -> }) =
+		withContext(Dispatchers.Default) {
 		isGenerating = true
 		Noise.setSeed(config.seed)
 		chunks.clear()
@@ -168,6 +169,7 @@ data class World(var config: WorldConfig) {
 						chunk.generate(seaLevel)
 						chunks[Vec3i(cx, cy, cz)] = chunk
 					}
+					onColumnGenerated(cx, cz)
 				}
 			}.awaitAll()
 		}

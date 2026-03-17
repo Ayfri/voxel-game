@@ -33,7 +33,7 @@ suspend fun buildTextureArray(blocksDir: File): Texture3d {
 	}
 
 	// Combine individual images into a single 3D texture array with nearest filtering
-	// to preserve the pixel-art look and CLAMP_TO_EDGE to avoid texture bleeding.
+	// to preserve the pixel-art look and REPEAT to support large merged quads.
 	return ImageData2dArray(loadedImages).toTexture(
 		mipMapping = MipMapping.Full,
 		samplerSettings = SamplerSettings(

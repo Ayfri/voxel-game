@@ -15,6 +15,7 @@ import de.fabmax.kool.util.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.cos
@@ -47,6 +48,10 @@ fun main() = KoolApplication(
 		val isRefreshing = AtomicBoolean(false)
 		val worldIsGenerated = AtomicBoolean(false)
 		val pendingMeshes = AtomicReference<List<Mesh<*>>?>(null)
+		val incrementalMeshes = ConcurrentLinkedQueue<Mesh<*>>()
+		val clearWorldRequested = AtomicBoolean(false)
+		val earlyRespawnRequested = AtomicBoolean(false)
+		val firstColumnGenerated = AtomicBoolean(false)
 
 		/**
 		 * Clears existing world meshes and rebuilds them. 
@@ -57,17 +62,50 @@ fun main() = KoolApplication(
 			val shader = voxelShader.get() ?: return
 
 			isRefreshing.set(true)
-			player.physicsEnabled = false
+			firstColumnGenerated.set(false)
+
+			if (regenerateWorld || !worldIsGenerated.get()) {
+				player.physicsEnabled = false
+			}
+
 			CoroutineScope(BackendScope.job).launch {
 				if (regenerateWorld || !worldIsGenerated.get()) {
-					world.generateAll()
+					clearWorldRequested.set(true)
+
+					world.generateAll { cx, cz ->
+						val columnMesh = generateColumnMesh(world, shader, cx, cz)
+						if (columnMesh != null) {
+							incrementalMeshes.add(columnMesh)
+							// Request respawn as soon as the first column is ready
+							if (firstColumnGenerated.compareAndSet(false, true)) {
+								earlyRespawnRequested.set(true)
+							}
+						}
+					}
 					worldIsGenerated.set(true)
+					isRefreshing.set(false)
+				} else {
+					pendingMeshes.set(generateWorldMeshes(world, shader, player.position.x, player.position.z))
 				}
-				pendingMeshes.set(generateWorldMeshes(world, shader, player.position.x, player.position.z))
 			}
 		}
 
 		onUpdate += {
+			if (clearWorldRequested.getAndSet(false)) {
+				worldNode.children.forEach { if (it is Mesh<*>) it.release() }
+				worldNode.clearChildren()
+			}
+
+			if (earlyRespawnRequested.getAndSet(false)) {
+				player.respawn()
+				player.physicsEnabled = true
+			}
+
+			// Handle incremental mesh updates
+			while (incrementalMeshes.peek() != null) {
+				incrementalMeshes.poll()?.let { worldNode.addNode(it) }
+			}
+
 			pendingMeshes.getAndSet(null)?.let { meshes ->
 				worldNode.children.forEach { if (it is Mesh<*>) it.release() }
 				worldNode.clearChildren()

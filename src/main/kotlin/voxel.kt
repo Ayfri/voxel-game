@@ -59,121 +59,139 @@ suspend fun generateWorldMeshes(
 
 	sortedColumnKeys.map { key ->
 		async {
-			val columnChunks = columns[key] ?: return@async null
-			if (columnChunks.all { it.isEmpty }) return@async null
+			generateColumnMesh(world, voxelShader, key.first, key.second)
+		}
+	}.awaitAll().filterNotNull()
+}
 
-			val mesh = Mesh(VOXEL_LAYOUT)
-			mesh.shader = voxelShader
-			mesh.generate {
-				columnChunks.forEach { chunk ->
-					if (chunk.isEmpty) return@forEach
+/**
+ * Generates a mesh for a single column of chunks at (cx, cz).
+ */
+@OptIn(ExperimentalUnsignedTypes::class)
+fun generateColumnMesh(
+	world: World,
+	voxelShader: KslShader,
+	cx: Int,
+	cz: Int
+): Mesh<*>? {
+	val worldChunks = world.chunks
+	val chunkSize = world.config.chunkSize
+	val columnChunks = (0 until world.config.worldHeight).mapNotNull { cy ->
+		worldChunks[Vec3i(cx, cy, cz)]
+	}
 
-					// Greedy meshing algorithm implementation
-					val mask = IntArray(chunkSize * chunkSize)
+	if (columnChunks.isEmpty() || columnChunks.all { it.isEmpty }) return null
 
-					// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
-					for (d in 0..5) {
-						val axis = d / 2
-						val isBackFace = d % 2 == 1
-						val u = (axis + 1) % 3
-						val v = (axis + 2) % 3
+	val mesh = Mesh(VOXEL_LAYOUT)
+	mesh.shader = voxelShader
+	mesh.generate {
+		columnChunks.forEach { chunk ->
+			if (chunk.isEmpty) return@forEach
 
-						val dir = IntArray(3)
-						dir[axis] = if (isBackFace) -1 else 1
+			// Greedy meshing algorithm implementation
+			val mask = IntArray(chunkSize * chunkSize)
 
-						val neighborOffset = Vec3i(dir[0], dir[1], dir[2])
-						val neighborChunk = worldChunks[Vec3i(
-							chunk.cx + neighborOffset.x,
-							chunk.cy + neighborOffset.y,
-							chunk.cz + neighborOffset.z
-						)]
+			// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
+			for (d in 0..5) {
+				val axis = d / 2
+				val isBackFace = d % 2 == 1
+				val u = (axis + 1) % 3
+				val v = (axis + 2) % 3
 
-						for (slice in 0 until chunkSize) {
-							mask.fill(-1)
+				val dir = IntArray(3)
+				dir[axis] = if (isBackFace) -1 else 1
 
-							// 1. Fill visibility mask for this slice
-							for (j in 0 until chunkSize) {
-								val rowOffset = j * chunkSize
-								for (i in 0 until chunkSize) {
-									val pos = IntArray(3)
-									pos[axis] = slice
-									pos[u] = i
-									pos[v] = j
+				val neighborOffset = Vec3i(dir[0], dir[1], dir[2])
+				val neighborChunk = worldChunks[Vec3i(
+					chunk.cx + neighborOffset.x,
+					chunk.cy + neighborOffset.y,
+					chunk.cz + neighborOffset.z
+				)]
 
-									val blockId = chunk.getBlock(pos[0], pos[1], pos[2])
-									if (blockId != -1) {
-										// Check if adjacent block is empty (visible face)
-										val nextPos = IntArray(3) { pos[it] + dir[it] }
-										val isVisible = if (nextPos[axis] in 0 until chunkSize) {
-											chunk.getBlock(nextPos[0], nextPos[1], nextPos[2]) == -1
-										} else {
-											// Use local coordinates in neighbor chunk
-											val lx = (nextPos[0] + chunkSize) % chunkSize
-											val ly = (nextPos[1] + chunkSize) % chunkSize
-											val lz = (nextPos[2] + chunkSize) % chunkSize
-											(neighborChunk?.getBlock(lx, ly, lz) ?: -1) == -1
-										}
+				for (slice in 0 until chunkSize) {
+					mask.fill(-1)
 
-										if (isVisible) {
-											val block = BLOCKS[blockId]
-											val texName = when (d) {
-												0, 1 -> block.xSideTexture
-												2 -> block.topTexture
-												3 -> block.bottomTexture
-												4, 5 -> block.zSideTexture
-												else -> ""
-											}
-											mask[i + rowOffset] = TEXTURE_INDEX_MAP[texName] ?: 0
-										}
+					// 1. Fill visibility mask for this slice
+					for (j in 0 until chunkSize) {
+						val rowOffset = j * chunkSize
+						for (i in 0 until chunkSize) {
+							val pos = IntArray(3)
+							pos[axis] = slice
+							pos[u] = i
+							pos[v] = j
+
+							val blockId = chunk.getBlock(pos[0], pos[1], pos[2])
+							if (blockId != -1) {
+								// Check if adjacent block is empty (visible face)
+								val nextPos = IntArray(3) { pos[it] + dir[it] }
+								val isVisible = if (nextPos[axis] in 0 until chunkSize) {
+									chunk.getBlock(nextPos[0], nextPos[1], nextPos[2]) == -1
+								} else {
+									// Use local coordinates in neighbor chunk
+									val lx = (nextPos[0] + chunkSize) % chunkSize
+									val ly = (nextPos[1] + chunkSize) % chunkSize
+									val lz = (nextPos[2] + chunkSize) % chunkSize
+									(neighborChunk?.getBlock(lx, ly, lz) ?: -1) == -1
+								}
+
+								if (isVisible) {
+									val block = BLOCKS[blockId]
+									val texName = when (d) {
+										0, 1 -> block.xSideTexture
+										2 -> block.topTexture
+										3 -> block.bottomTexture
+										4, 5 -> block.zSideTexture
+										else -> ""
 									}
+									mask[i + rowOffset] = TEXTURE_INDEX_MAP[texName] ?: 0
 								}
 							}
+						}
+					}
 
-							// 2. Perform greedy merging on the mask
-							for (j in 0 until chunkSize) {
-								var i = 0
-								while (i < chunkSize) {
-									val texIndex = mask[j * chunkSize + i]
-									if (texIndex != -1) {
-										// Find max width
-										var w = 1
-										while (i + w < chunkSize && mask[j * chunkSize + i + w] == texIndex) {
-											w++
-										}
+					// 2. Perform greedy merging on the mask
+					for (j in 0 until chunkSize) {
+						var i = 0
+						while (i < chunkSize) {
+							val texIndex = mask[j * chunkSize + i]
+							if (texIndex != -1) {
+								// Find max width
+								var w = 1
+								while (i + w < chunkSize && mask[j * chunkSize + i + w] == texIndex) {
+									w++
+								}
 
-										// Find max height for this width
-										var h = 1
-										outer@ while (j + h < chunkSize) {
-											val nextRowOffset = (j + h) * chunkSize
-											for (w_idx in 0 until w) {
-												if (mask[nextRowOffset + i + w_idx] != texIndex) break@outer
-											}
-											h++
-										}
+								// Find max height for this width
+								var h = 1
+								outer@ while (j + h < chunkSize) {
+									val nextRowOffset = (j + h) * chunkSize
+									for (w_idx in 0 until w) {
+										if (mask[nextRowOffset + i + w_idx] != texIndex) break@outer
+									}
+									h++
+								}
 
-										// Generate the merged quad
-										addGreedyFace(d, slice, i, j, w, h, texIndex, chunk)
+								// Generate the merged quad
+								addGreedyFace(d, slice, i, j, w, h, texIndex, chunk)
 
-										// Mark merged faces as processed
-										for (h_idx in 0 until h) {
-											val markRowOffset = (j + h_idx) * chunkSize
-											for (w_idx in 0 until w) {
-												mask[markRowOffset + i + w_idx] = -1
-											}
-										}
-										i += w
-									} else {
-										i++
+								// Mark merged faces as processed
+								for (h_idx in 0 until h) {
+									val markRowOffset = (j + h_idx) * chunkSize
+									for (w_idx in 0 until w) {
+										mask[markRowOffset + i + w_idx] = -1
 									}
 								}
+								i += w
+							} else {
+								i++
 							}
 						}
 					}
 				}
 			}
-			mesh
 		}
-	}.awaitAll().filterNotNull()
+	}
+	return mesh
 }
 
 /**
