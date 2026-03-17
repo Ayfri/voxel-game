@@ -13,7 +13,6 @@ repositories {
 dependencies {
 	val koolVersion = "0.19.0"
 	implementation("de.fabmax.kool:kool-core:$koolVersion")
-	implementation("de.fabmax.kool:kool-backend-wgpu4k:$koolVersion")
 }
 
 kotlin {
