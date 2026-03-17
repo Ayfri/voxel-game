@@ -37,10 +37,11 @@ suspend fun buildTextureArray(blocksDir: File): Texture3d {
 	return ImageData2dArray(loadedImages).toTexture(
 		mipMapping = MipMapping.Full,
 		samplerSettings = SamplerSettings(
-			minFilter = FilterMethod.NEAREST,
+			minFilter = FilterMethod.LINEAR,
 			magFilter = FilterMethod.NEAREST,
 			addressModeU = AddressMode.REPEAT,
-			addressModeV = AddressMode.REPEAT
+			addressModeV = AddressMode.REPEAT,
+			maxAnisotropy = 16,
 		)
 	)
 }
