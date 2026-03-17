@@ -1,6 +1,7 @@
 import de.fabmax.kool.*
 import de.fabmax.kool.input.*
 import de.fabmax.kool.math.Vec3f
+import de.fabmax.kool.math.Vec3i
 import de.fabmax.kool.math.deg
 import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.modules.ui2.*
@@ -26,7 +27,7 @@ fun main() = KoolApplication(
 	config = KoolConfigJvm()
 ) {
 	// Initialize world with default configuration.
-	val world = World(WorldConfig(width = 128, height = 24))
+	val world = World(WorldConfig(width = 256, height = 24))
 	val cursorTexture = mutableStateOf<Texture2d?>(null)
 	val fpsText = mutableStateOf("FPS: --")
 	val meshesText = mutableStateOf("Meshes: --")
@@ -73,13 +74,35 @@ fun main() = KoolApplication(
 				if (regenerateWorld || !worldIsGenerated.get()) {
 					clearWorldRequested.set(true)
 
+					val regionFirstColumnGenerated = mutableSetOf<Pair<Int, Int>>()
+
 					world.generateAll { cx, cz ->
-						val columnMesh = generateColumnMesh(world, shader, cx, cz)
-						if (columnMesh != null) {
-							incrementalMeshes.add(columnMesh)
-							// Request respawn as soon as the first column is ready
-							if (firstColumnGenerated.compareAndSet(false, true)) {
-								earlyRespawnRequested.set(true)
+						val rx = cx / REGION_SIZE
+						val rz = cz / REGION_SIZE
+
+						// Only generate the region mesh if we haven't already started it for this region
+						// or if we want to update it. Here, we'll wait for the whole region to be generated 
+						// for simplicity, or we can update it incrementally.
+						// To keep the "incremental" feel, we can re-generate the region mesh 
+						// every time a column in it is generated, but that's inefficient.
+						// Better: Generate region mesh only once all columns in a region are ready.
+
+						val regionReady = (0 until REGION_SIZE).all { lcx ->
+							(0 until REGION_SIZE).all { lcz ->
+								val gcx = rx * REGION_SIZE + lcx
+								val gcz = rz * REGION_SIZE + lcz
+								if (gcx >= world.config.worldWidth || gcz >= world.config.worldDepth) true
+								else world.chunks.containsKey(Vec3i(gcx, 0, gcz))
+							}
+						}
+
+						if (regionReady && regionFirstColumnGenerated.add(rx to rz)) {
+							val regionMesh = generateRegionMesh(world, shader, rx, rz)
+							if (regionMesh != null) {
+								incrementalMeshes.add(regionMesh)
+								if (firstColumnGenerated.compareAndSet(false, true)) {
+									earlyRespawnRequested.set(true)
+								}
 							}
 						}
 					}

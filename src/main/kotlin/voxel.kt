@@ -34,6 +34,8 @@ class VoxelLayout : Struct("VoxelLayout", MemoryLayout.TightlyPacked) {
 
 val VOXEL_LAYOUT = VoxelLayout()
 
+const val REGION_SIZE = 4
+
 /**
  * Generates voxel world meshes using Greedy Meshing algorithm.
  * This significantly reduces the number of faces and vertices by merging adjacent
@@ -49,45 +51,54 @@ suspend fun generateWorldMeshes(
 	val worldChunks = world.chunks
 	val chunkSize = world.config.chunkSize
 
-	val columns = worldChunks.values.groupBy { it.cx to it.cz }
+	// Group columns into regions of REGION_SIZE x REGION_SIZE
+	val regions = worldChunks.values.groupBy {
+		(it.cx / REGION_SIZE) to (it.cz / REGION_SIZE)
+	}
 
-	val sortedColumnKeys = columns.keys.sortedBy { (cx, cz) ->
-		val dx = (cx + 0.5f) * chunkSize - centerX
-		val dz = (cz + 0.5f) * chunkSize - centerZ
+	val sortedRegionKeys = regions.keys.sortedBy { (rx, rz) ->
+		val dx = (rx + 0.5f) * REGION_SIZE * chunkSize - centerX
+		val dz = (rz + 0.5f) * REGION_SIZE * chunkSize - centerZ
 		dx * dx + dz * dz
 	}
 
-	sortedColumnKeys.map { key ->
+	sortedRegionKeys.map { key ->
 		async {
-			generateColumnMesh(world, voxelShader, key.first, key.second)
+			generateRegionMesh(world, voxelShader, key.first, key.second)
 		}
 	}.awaitAll().filterNotNull()
 }
 
 /**
- * Generates a mesh for a single column of chunks at (cx, cz).
+ * Generates a mesh for a region of columns at (rx, rz).
  */
 @OptIn(ExperimentalUnsignedTypes::class)
-fun generateColumnMesh(
+fun generateRegionMesh(
 	world: World,
 	voxelShader: KslShader,
-	cx: Int,
-	cz: Int
+	rx: Int,
+	rz: Int
 ): Mesh<*>? {
 	val worldChunks = world.chunks
 	val chunkSize = world.config.chunkSize
-	val columnChunks = (0 until world.config.worldHeight).mapNotNull { cy ->
-		worldChunks[Vec3i(cx, cy, cz)]
+
+	val regionChunks = mutableListOf<Chunk>()
+	for (cx in rx * REGION_SIZE until (rx + 1) * REGION_SIZE) {
+		for (cz in rz * REGION_SIZE until (rz + 1) * REGION_SIZE) {
+			for (cy in 0 until world.config.worldHeight) {
+				worldChunks[Vec3i(cx, cy, cz)]?.let { regionChunks.add(it) }
+			}
+		}
 	}
 
-	if (columnChunks.isEmpty() || columnChunks.all { it.isEmpty }) return null
+	if (regionChunks.isEmpty() || regionChunks.all { it.isEmpty }) return null
 
 	val mesh = Mesh(VOXEL_LAYOUT)
 	mesh.shader = voxelShader
 	mesh.isFrustumChecked = true
 	val mask = getMask(chunkSize)
 	mesh.generate {
-		columnChunks.forEach { chunk ->
+		regionChunks.forEach { chunk ->
 			if (chunk.isEmpty) return@forEach
 
 			// Greedy meshing algorithm implementation
@@ -96,8 +107,6 @@ fun generateColumnMesh(
 			for (d in 0..5) {
 				val axis = d / 2
 				val isBackFace = d % 2 == 1
-				val u = (axis + 1) % 3
-				val v = (axis + 2) % 3
 
 				val dx = if (axis == 0) (if (isBackFace) -1 else 1) else 0
 				val dy = if (axis == 1) (if (isBackFace) -1 else 1) else 0
