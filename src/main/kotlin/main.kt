@@ -117,9 +117,17 @@ fun main() = KoolApplication(
 			}
 		}
 
+		// Listen for 'ENTER' key to respawn.
+		val enterListener = KeyboardInput.addKeyListener(KeyboardInput.KEY_ENTER, "Respawn") {
+			if (it.isPressed) {
+				player.respawn()
+			}
+		}
+
 		// Cleanup listeners when the scene is released.
 		onRelease {
 			KeyboardInput.removeKeyListener(keyListener)
+			KeyboardInput.removeKeyListener(enterListener)
 			KeyboardInput.removeKeyListener(escListener)
 			keyListeners.forEach { KeyboardInput.removeKeyListener(it) }
 		}

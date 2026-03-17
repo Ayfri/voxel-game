@@ -10,9 +10,13 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 class Player(val world: World) {
-	val position = MutableVec3f(100f, 200f, 100f)
+	val position = MutableVec3f()
 	val velocity = MutableVec3f()
 	var onGround = false
+
+	init {
+		respawn()
+	}
 
 	var yaw = 0f
 	var pitch = 0f
@@ -33,6 +37,7 @@ class Player(val world: World) {
 		val left = listOf(UniversalKeyCode('A'), UniversalKeyCode('Q'), KeyboardInput.KEY_CURSOR_LEFT)
 		val right = listOf(UniversalKeyCode('D'), KeyboardInput.KEY_CURSOR_RIGHT)
 		val jump = listOf(UniversalKeyCode(' '))
+		val respawn = listOf(KeyboardInput.KEY_ENTER)
 
 		val allMovement = forward + backward + left + right + jump
 	}
@@ -98,6 +103,17 @@ class Player(val world: World) {
 	fun onKeyEvent(ev: KeyEvent) {
 		if (ev.isPressed) pressedKeys.add(ev.keyCode.code)
 		if (ev.isReleased) pressedKeys.remove(ev.keyCode.code)
+	}
+
+	fun respawn() {
+		val centerX = (world.config.worldWidth * world.config.chunkSize) / 2f
+		val centerZ = (world.config.worldDepth * world.config.chunkSize) / 2f
+		val centerY = (world.config.worldHeight * world.config.chunkSize).toFloat()
+		position.set(centerX, centerY, centerZ)
+		velocity.set(0f, 0f, 0f)
+		yaw = 0f
+		pitch = 0f
+		onGround = false
 	}
 
 	private fun move(dx: Float, dy: Float, dz: Float) {

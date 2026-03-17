@@ -1,4 +1,5 @@
 import de.fabmax.kool.math.Vec3i
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
 /**
@@ -77,7 +78,7 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 
 data class World(var config: WorldConfig) {
 	// Map keyed by chunk coordinates (cx, cy, cz).
-	val chunks = mutableMapOf<Vec3i, Chunk>()
+	val chunks = ConcurrentHashMap<Vec3i, Chunk>()
 
 	fun generateAll() {
 		Noise.setSeed(config.seed)
