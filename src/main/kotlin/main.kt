@@ -28,6 +28,7 @@ fun main() = KoolApplication(
 	val world = World(WorldConfig(width = 64, height = 10))
 	val cursorTexture = mutableStateOf<Texture2d?>(null)
 	val fpsText = mutableStateOf("FPS: --")
+	val noclipText = mutableStateOf("")
 	val hudFont = mutableStateOf<Font?>(null)
 
 	addScene {
@@ -188,10 +189,24 @@ fun main() = KoolApplication(
 			}
 		}
 
+		val noclipListener = KeyboardInput.addKeyListener(UniversalKeyCode('N'), "Noclip") {
+			if (it.isPressed) {
+				player.isNoclip = !player.isNoclip
+			}
+		}
+
+		onUpdate += {
+			val scroll = PointerInput.primaryPointer.scroll.y
+			if (scroll != 0f) {
+				player.noclipSpeed = (player.noclipSpeed + scroll * 2f).coerceIn(1f, 400f)
+			}
+		}
+
 		// Cleanup listeners and meshes when the scene is released.
 		onRelease {
 			KeyboardInput.removeKeyListener(keyListener)
 			KeyboardInput.removeKeyListener(enterListener)
+			KeyboardInput.removeKeyListener(noclipListener)
 			KeyboardInput.removeKeyListener(escListener)
 			keyListeners.forEach { KeyboardInput.removeKeyListener(it) }
 			worldNode.children.forEach { if (it is Mesh<*>) it.release() }
@@ -200,6 +215,11 @@ fun main() = KoolApplication(
 		onUpdate += {
 			if (Time.frameCount % 20 == 0) {
 				fpsText.set("FPS: ${Time.fps.toInt()}")
+				if (player.isNoclip) {
+					noclipText.set("NOCLIP (Speed: ${player.noclipSpeed.toInt()})")
+				} else {
+					noclipText.set("")
+				}
 			}
 		}
 	}
@@ -212,27 +232,46 @@ fun main() = KoolApplication(
 				.size(Grow.Std, Grow.Std)
 				.background(null)
 
-			renderHud(fpsText, hudFont, cursorTexture)
+			renderHud(fpsText, noclipText, hudFont, cursorTexture)
 		})
 	}
 }
 
 private fun UiScope.renderHud(
 	fpsText: MutableStateValue<String>,
+	noclipText: MutableStateValue<String>,
 	hudFont: MutableStateValue<Font?>,
 	cursorTexture: MutableStateValue<Texture2d?>
 ) {
-	Text(fpsText.use()) {
-		val font = hudFont.use() ?: sizes.smallText
+	Column {
 		modifier
 			.align(AlignmentX.Start, AlignmentY.Top)
-			.margin(all = 8.dp)
-			.padding(horizontal = 8.dp)
-			.textColor(Color.WHITE)
-			.font(font)
-			.height(50.dp)
-			.textAlignX(AlignmentX.Start)
-			.textAlignY(AlignmentY.Center)
+			.margin(top = 8.dp, start = 8.dp)
+
+		Text(fpsText.use()) {
+			val font = hudFont.use() ?: sizes.smallText
+			modifier
+				.textColor(Color.WHITE)
+				.font(font)
+				.height(50.dp)
+				.padding(horizontal = 8.dp)
+				.textAlignX(AlignmentX.Start)
+				.textAlignY(AlignmentY.Center)
+		}
+
+		val nt = noclipText.use()
+		if (nt.isNotEmpty()) {
+			Text(nt) {
+				val font = hudFont.use() ?: sizes.smallText
+				modifier
+					.textColor(Color.RED)
+					.font(font)
+					.height(50.dp)
+					.padding(horizontal = 8.dp)
+					.textAlignX(AlignmentX.Start)
+					.textAlignY(AlignmentY.Center)
+			}
+		}
 	}
 
 	val cursor = cursorTexture.use()

@@ -14,6 +14,8 @@ class Player(val world: World) {
 	val velocity = MutableVec3f()
 	var onGround = false
 	var physicsEnabled = false
+	var isNoclip = false
+	var noclipSpeed = 20f
 
 	init {
 		respawn()
@@ -39,12 +41,18 @@ class Player(val world: World) {
 		val right = listOf(UniversalKeyCode('D'), KeyboardInput.KEY_CURSOR_RIGHT)
 		val jump = listOf(UniversalKeyCode(' '))
 		val respawn = listOf(KeyboardInput.KEY_ENTER)
+		val descend = listOf(KeyboardInput.KEY_SHIFT_LEFT, KeyboardInput.KEY_SHIFT_RIGHT)
 
-		val allMovement = forward + backward + left + right + jump
+		val allMovement = forward + backward + left + right + jump + descend
 	}
 
 	fun update(dt: Float) {
 		if (!physicsEnabled) return
+
+		if (isNoclip) {
+			handleNoclipInput(dt)
+			return
+		}
 
 		// Apply gravity
 		velocity.y -= gravity * dt
@@ -88,17 +96,50 @@ class Player(val world: World) {
 			val cosYaw = cos(radYaw)
 			val sinYaw = sin(radYaw)
 
-			velocity.x = (localX * cosYaw - localZ * sinYaw) * walkSpeed
-			velocity.z = (localX * sinYaw + localZ * cosYaw) * walkSpeed
+			velocity.x = (localX * cosYaw - localZ * sinYaw) * (if (isNoclip) noclipSpeed else walkSpeed)
+			velocity.z = (localX * sinYaw + localZ * cosYaw) * (if (isNoclip) noclipSpeed else walkSpeed)
 		} else {
 			velocity.x = 0f
 			velocity.z = 0f
 		}
 
-		if (onGround && Controls.jump.any { isKeyPressed(it) }) {
+		if (!isNoclip && onGround && Controls.jump.any { isKeyPressed(it) }) {
 			velocity.y = jumpSpeed
 			onGround = false
 		}
+	}
+
+	private fun handleNoclipInput(dt: Float) {
+		var moveX = 0f
+		var moveY = 0f
+		var moveZ = 0f
+
+		if (Controls.forward.any { isKeyPressed(it) }) moveZ -= 1f
+		if (Controls.backward.any { isKeyPressed(it) }) moveZ += 1f
+		if (Controls.left.any { isKeyPressed(it) }) moveX -= 1f
+		if (Controls.right.any { isKeyPressed(it) }) moveX += 1f
+		if (Controls.jump.any { isKeyPressed(it) }) moveY += 1f
+		if (Controls.descend.any { isKeyPressed(it) }) moveY -= 1f
+
+		if (moveX != 0f || moveY != 0f || moveZ != 0f) {
+			val length = sqrt(moveX * moveX + moveY * moveY + moveZ * moveZ)
+			val localX = moveX / length
+			val localY = moveY / length
+			val localZ = moveZ / length
+
+			val radYaw = yaw.deg.rad
+			val cosYaw = cos(radYaw)
+			val sinYaw = sin(radYaw)
+
+			val vx = (localX * cosYaw - localZ * sinYaw) * noclipSpeed
+			val vy = localY * noclipSpeed
+			val vz = (localX * sinYaw + localZ * cosYaw) * noclipSpeed
+
+			position.x += vx * dt
+			position.y += vy * dt
+			position.z += vz * dt
+		}
+		velocity.set(0f, 0f, 0f)
 	}
 
 	private fun isKeyPressed(keyCode: KeyCode) = pressedKeys.contains(keyCode.code)
