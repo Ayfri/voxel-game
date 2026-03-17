@@ -41,6 +41,7 @@ suspend fun buildTextureArray(blocksDir: File): Texture3d {
 			magFilter = FilterMethod.NEAREST,
 			addressModeU = AddressMode.REPEAT,
 			addressModeV = AddressMode.REPEAT,
+			addressModeW = AddressMode.CLAMP_TO_EDGE,
 			maxAnisotropy = 16,
 		)
 	)
