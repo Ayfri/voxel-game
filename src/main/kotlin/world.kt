@@ -32,19 +32,25 @@ data class WorldConfig(
 class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 	// Stores all solid blocks in this chunk.
 	// 255 represents air (no block).
-	val blocks = UByteArray(config.chunkSize * config.chunkSize * config.chunkSize) { 255u }
+	private var _blocks: UByteArray? = null
 	var isEmpty = true
 		private set
 
 	private fun getIndex(lx: Int, ly: Int, lz: Int) = (lx * config.chunkSize + ly) * config.chunkSize + lz
 
 	fun setBlock(lx: Int, ly: Int, lz: Int, id: Int) {
-		blocks[getIndex(lx, ly, lz)] = id.toUByte()
-		if (id != -1) isEmpty = false
+		val uId = id.toUByte()
+		if (uId == 255u.toUByte() && _blocks == null) return
+
+		val b =
+			_blocks ?: UByteArray(config.chunkSize * config.chunkSize * config.chunkSize) { 255u }.also { _blocks = it }
+		b[getIndex(lx, ly, lz)] = uId
+		if (uId != 255u.toUByte()) isEmpty = false
 	}
 
 	fun getBlock(lx: Int, ly: Int, lz: Int): Int {
-		val id = blocks[getIndex(lx, ly, lz)].toInt()
+		val b = _blocks ?: return -1
+		val id = b[getIndex(lx, ly, lz)].toInt()
 		return if (id == 255) -1 else id
 	}
 
@@ -124,7 +130,8 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 							worldY > surfaceY - 3 -> config.dirtBlockId
 							else -> config.stoneBlockId
 						}
-						blocks[baseIndex + ly * chunkSize] = id.toUByte()
+						val b = _blocks ?: UByteArray(chunkSize * chunkSize * chunkSize) { 255u }.also { _blocks = it }
+						b[baseIndex + ly * chunkSize] = id.toUByte()
 						if (id != -1) isEmpty = false
 					}
 				}

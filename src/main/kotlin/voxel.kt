@@ -1,7 +1,7 @@
-import de.fabmax.kool.math.Vec2f
+import de.fabmax.kool.math.MutableVec2f
+import de.fabmax.kool.math.MutableVec3f
 import de.fabmax.kool.math.Vec3f
 import de.fabmax.kool.math.Vec3i
-import de.fabmax.kool.math.deg
 import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.modules.ksl.blocks.mvpMatrix
 import de.fabmax.kool.modules.ksl.lang.*
@@ -97,6 +97,15 @@ fun generateRegionMesh(
 	mesh.shader = voxelShader
 	mesh.isFrustumChecked = true
 	val mask = getMask(chunkSize)
+	val p0 = MutableVec3f()
+	val p1 = MutableVec3f()
+	val p2 = MutableVec3f()
+	val p3 = MutableVec3f()
+	val n = MutableVec3f()
+	val uv0 = MutableVec2f()
+	val uv1 = MutableVec2f()
+	val uv2 = MutableVec2f()
+	val uv3 = MutableVec2f()
 	mesh.generate {
 		regionChunks.forEach { chunk ->
 			if (chunk.isEmpty) return@forEach
@@ -195,7 +204,25 @@ fun generateRegionMesh(
 								}
 
 								// Generate the merged quad
-								addGreedyFace(d, slice, i, j, w, h, texIndex, chunk)
+								addGreedyFace(
+									d,
+									slice,
+									i,
+									j,
+									w,
+									h,
+									texIndex,
+									chunk,
+									p0,
+									p1,
+									p2,
+									p3,
+									n,
+									uv0,
+									uv1,
+									uv2,
+									uv3
+								)
 
 								// Mark merged faces as processed
 								for (h_idx in 0 until h) {
@@ -228,12 +255,25 @@ private fun MeshBuilder<VoxelLayout>.addGreedyFace(
 	w: Int,
 	h: Int,
 	texIndex: Int,
-	chunk: Chunk
+	chunk: Chunk,
+	p0: MutableVec3f,
+	p1: MutableVec3f,
+	p2: MutableVec3f,
+	p3: MutableVec3f,
+	n: MutableVec3f,
+	uv0: MutableVec2f,
+	uv1: MutableVec2f,
+	uv2: MutableVec2f,
+	uv3: MutableVec2f
 ) {
 	val chunkSize = chunk.config.chunkSize
-	val wx = (chunk.cx * chunkSize).toFloat()
-	val wy = (chunk.cy * chunkSize).toFloat()
-	val wz = (chunk.cz * chunkSize).toFloat()
+	val fx = (chunk.cx * chunkSize).toFloat()
+	val fy = (chunk.cy * chunkSize).toFloat()
+	val fz = (chunk.cz * chunkSize).toFloat()
+
+	val fw = w.toFloat()
+	val fh = h.toFloat()
+	val fs = slice.toFloat()
 
 	val shade = when (d) {
 		0, 1 -> 0.8f
@@ -245,55 +285,82 @@ private fun MeshBuilder<VoxelLayout>.addGreedyFace(
 	color = Color(shade, shade, shade, 1f)
 	vertexCustomizer = { layout -> set(layout.texIndex, texIndex.toFloat()) }
 
-	withTransform {
-		when (d) {
-			0 -> { // +X
-				translate(wx + slice + 1.0f, wy + u + w / 2.0f, wz + v + h / 2.0f)
-				rotate(90f.deg, Vec3f.Y_AXIS)
-				addTexturedRect(h.toFloat(), w.toFloat())
-			}
+	when (d) {
+		0 -> { // +X
+			n.set(1f, 0f, 0f)
+			p0.set(fx + fs + 1f, fy + u, fz + v + h)
+			p1.set(fx + fs + 1f, fy + u, fz + v)
+			p2.set(fx + fs + 1f, fy + u + w, fz + v)
+			p3.set(fx + fs + 1f, fy + u + w, fz + v + h)
+			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+		}
 
-			1 -> { // -X
-				translate(wx + slice, wy + u + w / 2.0f, wz + v + h / 2.0f)
-				rotate((-90f).deg, Vec3f.Y_AXIS)
-				addTexturedRect(h.toFloat(), w.toFloat())
-			}
+		1 -> { // -X
+			n.set(-1f, 0f, 0f)
+			p0.set(fx + fs, fy + u, fz + v)
+			p1.set(fx + fs, fy + u, fz + v + h)
+			p2.set(fx + fs, fy + u + w, fz + v + h)
+			p3.set(fx + fs, fy + u + w, fz + v)
+			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+		}
 
-			2 -> { // +Y
-				translate(wx + v + h / 2.0f, wy + slice + 1.0f, wz + u + w / 2.0f)
-				rotate((-90f).deg, Vec3f.X_AXIS)
-				addTexturedRect(h.toFloat(), w.toFloat())
-			}
+		2 -> { // +Y
+			n.set(0f, 1f, 0f)
+			p0.set(fx + v, fy + fs + 1f, fz + u + w)
+			p1.set(fx + v + h, fy + fs + 1f, fz + u + w)
+			p2.set(fx + v + h, fy + fs + 1f, fz + u)
+			p3.set(fx + v, fy + fs + 1f, fz + u)
+			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+		}
 
-			3 -> { // -Y
-				translate(wx + v + h / 2.0f, wy + slice, wz + u + w / 2.0f)
-				rotate(90f.deg, Vec3f.X_AXIS)
-				addTexturedRect(h.toFloat(), w.toFloat())
-			}
+		3 -> { // -Y
+			n.set(0f, -1f, 0f)
+			p0.set(fx + v + h, fy + fs, fz + u + w)
+			p1.set(fx + v, fy + fs, fz + u + w)
+			p2.set(fx + v, fy + fs, fz + u)
+			p3.set(fx + v + h, fy + fs, fz + u)
+			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+		}
 
-			4 -> { // +Z
-				translate(wx + u + w / 2.0f, wy + v + h / 2.0f, wz + slice + 1.0f)
-				addTexturedRect(w.toFloat(), h.toFloat())
-			}
+		4 -> { // +Z
+			n.set(0f, 0f, 1f)
+			p0.set(fx + u, fy + v, fz + fs + 1f)
+			p1.set(fx + u + w, fy + v, fz + fs + 1f)
+			p2.set(fx + u + w, fy + v + h, fz + fs + 1f)
+			p3.set(fx + u, fy + v + h, fz + fs + 1f)
+			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
+		}
 
-			5 -> { // -Z
-				translate(wx + u + w / 2.0f, wy + v + h / 2.0f, wz + slice)
-				rotate(180f.deg, Vec3f.Y_AXIS)
-				addTexturedRect(w.toFloat(), h.toFloat())
-			}
+		5 -> { // -Z
+			n.set(0f, 0f, -1f)
+			p0.set(fx + u + w, fy + v, fz + fs)
+			p1.set(fx + u, fy + v, fz + fs)
+			p2.set(fx + u, fy + v + h, fz + fs)
+			p3.set(fx + u + w, fy + v + h, fz + fs)
+			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
 		}
 	}
 }
 
-/**
- * Adds a rectangle to the geometry with specific width/height and repeated UVs.
- */
-private fun MeshBuilder<VoxelLayout>.addTexturedRect(width: Float, height: Float) {
-	val i0 = vertex(Vec3f(-width / 2.0f, -height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(0f, height))
-	val i1 = vertex(Vec3f(width / 2.0f, -height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(width, height))
-	val i2 = vertex(Vec3f(width / 2.0f, height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(width, 0f))
-	val i3 = vertex(Vec3f(-width / 2.0f, height / 2.0f, 0f), Vec3f.Z_AXIS, Vec2f(0f, 0f))
-	geometry.addIndices(i0, i1, i2, i0, i2, i3)
+private fun MeshBuilder<VoxelLayout>.addFace(
+	p0: Vec3f, p1: Vec3f, p2: Vec3f, p3: Vec3f,
+	n: Vec3f,
+	uMax: Float, vMax: Float,
+	uv0: MutableVec2f,
+	uv1: MutableVec2f,
+	uv2: MutableVec2f,
+	uv3: MutableVec2f
+) {
+	val i0 = vertex(p0, n, uv0.set(0f, vMax))
+	val i1 = vertex(p1, n, uv1.set(uMax, vMax))
+	val i2 = vertex(p2, n, uv2.set(uMax, 0f))
+	val i3 = vertex(p3, n, uv3.set(0f, 0f))
+	geometry.addIndex(i0)
+	geometry.addIndex(i1)
+	geometry.addIndex(i2)
+	geometry.addIndex(i0)
+	geometry.addIndex(i2)
+	geometry.addIndex(i3)
 }
 
 /**
