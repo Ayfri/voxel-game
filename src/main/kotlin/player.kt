@@ -29,8 +29,8 @@ class Player(val world: World) {
 	val depth = 1.9f
 
 	val walkSpeed = 10f
-	val jumpSpeed = 12f
-	val gravity = 30f
+	val jumpSpeed = 16f
+	val gravity = 50f
 
 	private val pressedKeys = mutableSetOf<Int>()
 
@@ -56,7 +56,7 @@ class Player(val world: World) {
 
 		// Apply gravity
 		velocity.y -= gravity * dt
-		if (velocity.y < -50f) velocity.y = -50f // Terminal velocity
+		if (velocity.y < -100f) velocity.y = -100f // Terminal velocity
 
 		// Horizontal movement
 		handleInput()
