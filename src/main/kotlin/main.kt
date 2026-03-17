@@ -212,27 +212,35 @@ fun main() = KoolApplication(
 				.size(Grow.Std, Grow.Std)
 				.background(null)
 
-			Text(fpsText.use()) {
-				val font = hudFont.use() ?: sizes.smallText
-				modifier
-					.align(AlignmentX.Start, AlignmentY.Top)
-					.margin(all = 20.dp)
-					.padding(horizontal = 16.dp)
-					.textColor(Color.WHITE)
-					.font(font)
-					.height(60.dp)
-					.textAlignX(AlignmentX.Start)
-					.textAlignY(AlignmentY.Center)
-			}
-
-			val cursor = cursorTexture.use()
-			if (cursor != null) {
-				Image(cursor) {
-					modifier
-						.size(16.dp, 16.dp)
-						.align(AlignmentX.Center, AlignmentY.Center)
-				}
-			}
+			renderHud(fpsText, hudFont, cursorTexture)
 		})
+	}
+}
+
+private fun UiScope.renderHud(
+	fpsText: MutableStateValue<String>,
+	hudFont: MutableStateValue<Font?>,
+	cursorTexture: MutableStateValue<Texture2d?>
+) {
+	Text(fpsText.use()) {
+		val font = hudFont.use() ?: sizes.smallText
+		modifier
+			.align(AlignmentX.Start, AlignmentY.Top)
+			.margin(all = 8.dp)
+			.padding(horizontal = 8.dp)
+			.textColor(Color.WHITE)
+			.font(font)
+			.height(50.dp)
+			.textAlignX(AlignmentX.Start)
+			.textAlignY(AlignmentY.Center)
+	}
+
+	val cursor = cursorTexture.use()
+	if (cursor != null) {
+		Image(cursor) {
+			modifier
+				.size(16.dp, 16.dp)
+				.align(AlignmentX.Center, AlignmentY.Center)
+		}
 	}
 }
