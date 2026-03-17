@@ -85,7 +85,7 @@ fun generateColumnMesh(
 	val mesh = Mesh(VOXEL_LAYOUT)
 	mesh.shader = voxelShader
 	mesh.isFrustumChecked = true
-	val mask = IntArray(chunkSize * chunkSize)
+	val mask = getMask(chunkSize)
 	mesh.generate {
 		columnChunks.forEach { chunk ->
 			if (chunk.isEmpty) return@forEach
@@ -327,4 +327,20 @@ fun createVoxelShader(): KslShader {
 		cullMethod = CullMethod.CULL_BACK_FACES
 	)
 	return shader
+}
+
+private val maskThreadLocal = ThreadLocal<IntArray>()
+
+/**
+ * Gets a cached IntArray from ThreadLocal or creates a new one if it doesn't exist.
+ * The array is guaranteed to be at least as large as chunkSize * chunkSize.
+ */
+private fun getMask(chunkSize: Int): IntArray {
+	val size = chunkSize * chunkSize
+	var mask = maskThreadLocal.get()
+	if (mask == null || mask.size < size) {
+		mask = IntArray(size)
+		maskThreadLocal.set(mask)
+	}
+	return mask
 }
