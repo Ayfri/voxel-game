@@ -1,16 +1,17 @@
-import de.fabmax.kool.KoolApplication
-import de.fabmax.kool.KoolConfigJvm
-import de.fabmax.kool.addScene
+import de.fabmax.kool.*
 import de.fabmax.kool.input.*
 import de.fabmax.kool.math.Vec3f
 import de.fabmax.kool.math.deg
 import de.fabmax.kool.modules.ksl.KslShader
+import de.fabmax.kool.modules.ui2.*
 import de.fabmax.kool.pipeline.ClearColorFill
+import de.fabmax.kool.pipeline.FilterMethod
+import de.fabmax.kool.pipeline.SamplerSettings
+import de.fabmax.kool.pipeline.Texture2d
 import de.fabmax.kool.scene.Mesh
 import de.fabmax.kool.scene.Node
 import de.fabmax.kool.scene.PerspectiveCamera
-import de.fabmax.kool.util.BackendScope
-import de.fabmax.kool.util.Time
+import de.fabmax.kool.util.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.io.File
@@ -25,6 +26,9 @@ fun main() = KoolApplication(
 ) {
 	// Initialize world with default configuration.
 	val world = World(WorldConfig(width = 32, height = 10))
+	val cursorTexture = mutableStateOf<Texture2d?>(null)
+	val fpsText = mutableStateOf("FPS: --")
+	val hudFont = mutableStateOf<Font?>(null)
 
 	addScene {
 		// Initialize player
@@ -133,6 +137,38 @@ fun main() = KoolApplication(
 			}
 			voxelShader.set(shader)
 
+			val bytes = File("src/main/resources/ui/cursor.png").readBytes()
+			val buffer = Uint8BufferImpl(bytes)
+			val image = Assets.loadImageFromBuffer(buffer, MimeType.forFileName("cursor.png"))
+			cursorTexture.set(
+				Texture2d(
+					image,
+					samplerSettings = SamplerSettings(
+						minFilter = FilterMethod.NEAREST,
+						magFilter = FilterMethod.NEAREST
+					)
+				)
+			)
+
+			val fontFile = File("src/main/resources/fonts/VCR_OSD_MONO_1.001.ttf")
+			if (fontFile.exists()) {
+				val baseFont = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, fontFile)
+				java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().registerFont(baseFont)
+				hudFont.set(
+					AtlasFont(
+						family = baseFont.name,
+						sizePts = 20f,
+						ascentEm = 1.3f,
+						descentEm = 0.5f,
+						heightEm = 1.8f,
+						samplerSettings = SamplerSettings(
+							minFilter = FilterMethod.NEAREST,
+							magFilter = FilterMethod.NEAREST
+						)
+					)
+				)
+			}
+
 			// Initial mesh generation.
 			refreshWorldMesh()
 		}
@@ -152,12 +188,51 @@ fun main() = KoolApplication(
 			}
 		}
 
-		// Cleanup listeners when the scene is released.
+		// Cleanup listeners and meshes when the scene is released.
 		onRelease {
 			KeyboardInput.removeKeyListener(keyListener)
 			KeyboardInput.removeKeyListener(enterListener)
 			KeyboardInput.removeKeyListener(escListener)
 			keyListeners.forEach { KeyboardInput.removeKeyListener(it) }
+			worldNode.children.forEach { if (it is Mesh<*>) it.release() }
 		}
+
+		onUpdate += {
+			if (Time.frameCount % 20 == 0) {
+				fpsText.set("FPS: ${Time.fps.toInt()}")
+			}
+		}
+	}
+
+	addScene {
+		setupUiScene()
+
+		addNode(UiSurface(this, name = "HUD") {
+			modifier
+				.size(Grow.Std, Grow.Std)
+				.background(null)
+
+			Text(fpsText.use()) {
+				val font = hudFont.use() ?: sizes.smallText
+				modifier
+					.align(AlignmentX.Start, AlignmentY.Top)
+					.margin(all = 20.dp)
+					.padding(horizontal = 16.dp)
+					.textColor(Color.WHITE)
+					.font(font)
+					.height(60.dp)
+					.textAlignX(AlignmentX.Start)
+					.textAlignY(AlignmentY.Center)
+			}
+
+			val cursor = cursorTexture.use()
+			if (cursor != null) {
+				Image(cursor) {
+					modifier
+						.size(16.dp, 16.dp)
+						.align(AlignmentX.Center, AlignmentY.Center)
+				}
+			}
+		})
 	}
 }

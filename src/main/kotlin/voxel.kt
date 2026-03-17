@@ -209,10 +209,9 @@ fun createVoxelShader(): KslShader {
 			}
 		}
 		fragmentStage {
+			val tex = texture3d("tBlockArray")
+			val uNumLayers = uniformFloat1("uNumLayers")
 			main {
-				val tex = texture3d("tBlockArray")
-				val uNumLayers = uniformFloat1("uNumLayers")
-
 				val sampleCoords = float3Value(
 					uv.output.x,
 					uv.output.y,
