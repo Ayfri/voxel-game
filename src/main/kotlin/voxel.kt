@@ -170,12 +170,18 @@ suspend fun generateRegionMesh(
 						val lx: Int
 						val ly: Int
 						val lz: Int
-						if (axis == 0) {
-							lx = slice; ly = i; lz = j
-						} else if (axis == 1) {
-							lx = j; ly = slice; lz = i
-						} else {
-							lx = i; ly = j; lz = slice
+						when (axis) {
+							0 -> {
+								lx = slice; ly = j; lz = i
+							}
+
+							1 -> {
+								lx = i; ly = slice; lz = j
+							}
+
+							else -> {
+								lx = i; ly = j; lz = slice
+							}
 						}
 
 						val blockId = chunk.getBlock(lx, ly, lz)
@@ -223,8 +229,8 @@ suspend fun generateRegionMesh(
 							var h = 1
 							outer@ while (j + h < chunkSize) {
 								val nextRowOffset = (j + h) * chunkSize
-								for (w_idx in 0 until w) {
-									if (mask[nextRowOffset + i + w_idx] != texIndex) break@outer
+								for (wi in 0 until w) {
+									if (mask[nextRowOffset + i + wi] != texIndex) break@outer
 								}
 								h++
 							}
@@ -251,10 +257,10 @@ suspend fun generateRegionMesh(
 							)
 
 							// Mark merged faces as processed
-							for (h_idx in 0 until h) {
-								val markRowOffset = (j + h_idx) * chunkSize
-								for (w_idx in 0 until w) {
-									mask[markRowOffset + i + w_idx] = -1
+							for (hi in 0 until h) {
+								val markRowOffset = (j + hi) * chunkSize
+								for (wi in 0 until w) {
+									mask[markRowOffset + i + wi] = -1
 								}
 							}
 							i += w
@@ -266,6 +272,7 @@ suspend fun generateRegionMesh(
 			}
 		}
 	}
+	mesh.updateGeometryBounds()
 	return mesh
 }
 
@@ -313,55 +320,55 @@ private fun MeshBuilder<VoxelLayout>.addGreedyFace(
 	when (d) {
 		0 -> { // +X
 			n.set(1f, 0f, 0f)
-			p0.set(fx + fs + 1f, fy + u, fz + v + h)
-			p1.set(fx + fs + 1f, fy + u, fz + v)
-			p2.set(fx + fs + 1f, fy + u + w, fz + v)
-			p3.set(fx + fs + 1f, fy + u + w, fz + v + h)
-			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+			p0.set(fx + fs + 1f, fy + v, fz + u)
+			p1.set(fx + fs + 1f, fy + v, fz + u + w)
+			p2.set(fx + fs + 1f, fy + v + h, fz + u + w)
+			p3.set(fx + fs + 1f, fy + v + h, fz + u)
+			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
 		}
 
 		1 -> { // -X
 			n.set(-1f, 0f, 0f)
-			p0.set(fx + fs, fy + u, fz + v)
-			p1.set(fx + fs, fy + u, fz + v + h)
-			p2.set(fx + fs, fy + u + w, fz + v + h)
-			p3.set(fx + fs, fy + u + w, fz + v)
-			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+			p0.set(fx + fs, fy + v, fz + u + w)
+			p1.set(fx + fs, fy + v, fz + u)
+			p2.set(fx + fs, fy + v + h, fz + u)
+			p3.set(fx + fs, fy + v + h, fz + u + w)
+			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
 		}
 
 		2 -> { // +Y
 			n.set(0f, 1f, 0f)
-			p0.set(fx + v, fy + fs + 1f, fz + u + w)
-			p1.set(fx + v + h, fy + fs + 1f, fz + u + w)
-			p2.set(fx + v + h, fy + fs + 1f, fz + u)
-			p3.set(fx + v, fy + fs + 1f, fz + u)
-			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+			p0.set(fx + u, fy + fs + 1f, fz + v)
+			p1.set(fx + u + w, fy + fs + 1f, fz + v)
+			p2.set(fx + u + w, fy + fs + 1f, fz + v + h)
+			p3.set(fx + u, fy + fs + 1f, fz + v + h)
+			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
 		}
 
 		3 -> { // -Y
 			n.set(0f, -1f, 0f)
-			p0.set(fx + v + h, fy + fs, fz + u + w)
-			p1.set(fx + v, fy + fs, fz + u + w)
-			p2.set(fx + v, fy + fs, fz + u)
-			p3.set(fx + v + h, fy + fs, fz + u)
-			addFace(p0, p1, p2, p3, n, fh, fw, uv0, uv1, uv2, uv3)
+			p0.set(fx + u, fy + fs, fz + v + h)
+			p1.set(fx + u + w, fy + fs, fz + v + h)
+			p2.set(fx + u + w, fy + fs, fz + v)
+			p3.set(fx + u, fy + fs, fz + v)
+			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
 		}
 
 		4 -> { // +Z
 			n.set(0f, 0f, 1f)
-			p0.set(fx + u, fy + v, fz + fs + 1f)
-			p1.set(fx + u + w, fy + v, fz + fs + 1f)
-			p2.set(fx + u + w, fy + v + h, fz + fs + 1f)
-			p3.set(fx + u, fy + v + h, fz + fs + 1f)
+			p0.set(fx + u + w, fy + v, fz + fs + 1f)
+			p1.set(fx + u, fy + v, fz + fs + 1f)
+			p2.set(fx + u, fy + v + h, fz + fs + 1f)
+			p3.set(fx + u + w, fy + v + h, fz + fs + 1f)
 			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
 		}
 
 		5 -> { // -Z
 			n.set(0f, 0f, -1f)
-			p0.set(fx + u + w, fy + v, fz + fs)
-			p1.set(fx + u, fy + v, fz + fs)
-			p2.set(fx + u, fy + v + h, fz + fs)
-			p3.set(fx + u + w, fy + v + h, fz + fs)
+			p0.set(fx + u, fy + v, fz + fs)
+			p1.set(fx + u + w, fy + v, fz + fs)
+			p2.set(fx + u + w, fy + v + h, fz + fs)
+			p3.set(fx + u, fy + v + h, fz + fs)
 			addFace(p0, p1, p2, p3, n, fw, fh, uv0, uv1, uv2, uv3)
 		}
 	}
@@ -381,11 +388,11 @@ private fun MeshBuilder<VoxelLayout>.addFace(
 	val i2 = vertex(p2, n, uv2.set(uMax, 0f))
 	val i3 = vertex(p3, n, uv3.set(0f, 0f))
 	geometry.addIndex(i0)
+	geometry.addIndex(i2)
 	geometry.addIndex(i1)
-	geometry.addIndex(i2)
 	geometry.addIndex(i0)
-	geometry.addIndex(i2)
 	geometry.addIndex(i3)
+	geometry.addIndex(i2)
 }
 
 /**
