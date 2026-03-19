@@ -1,0 +1,3 @@
+const val REGION_SIZE = 4
+const val WORLD_LIMIT = 67108864
+const val WORLD_LIMIT_CHUNKS = WORLD_LIMIT / 16

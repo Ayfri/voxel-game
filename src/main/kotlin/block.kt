@@ -4,29 +4,29 @@ import de.fabmax.kool.util.Color
  * Defines a block type with its associated textures for different faces.
  */
 data class Block(
+	val bottomTexture: String,
 	val name: String,
 	val topTexture: String,
-	val bottomTexture: String,
 	val xSideTexture: String,
 	val zSideTexture: String,
 ) {
 	// Simple block with the same texture on all faces.
-	constructor(name: String, texture: String) : this(name, texture, texture, texture, texture)
+	constructor(name: String, texture: String) : this(texture, name, texture, texture, texture)
 
 	// Block with separate textures for top and bottom.
 	constructor(name: String, topTexture: String, bottomTexture: String) : this(
+		bottomTexture,
 		name,
 		topTexture,
-		bottomTexture,
 		topTexture,
 		bottomTexture
 	)
 
 	// Block with separate textures for top, bottom, and all sides.
 	constructor(name: String, topTexture: String, bottomTexture: String, sideTexture: String) : this(
+		bottomTexture,
 		name,
 		topTexture,
-		bottomTexture,
 		sideTexture,
 		sideTexture
 	)
@@ -44,7 +44,7 @@ val BLOCKS = listOf(
 /**
  * A specific instance of a block at a world position.
  */
-data class BlockInstance(val x: Int, val y: Int, val z: Int, val blockId: Int) {
+data class BlockInstance(val blockId: Int, val x: Int, val y: Int, val z: Int) {
 	val block get() = lazy { BLOCKS[blockId] }
 
 	fun getTopTexture() = block.value.topTexture

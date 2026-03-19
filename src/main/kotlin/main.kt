@@ -1,7 +1,7 @@
+
 import de.fabmax.kool.*
 import de.fabmax.kool.input.*
 import de.fabmax.kool.math.Vec3f
-import de.fabmax.kool.math.Vec3i
 import de.fabmax.kool.math.deg
 import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.modules.ui2.*
@@ -16,8 +16,6 @@ import de.fabmax.kool.util.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.io.File
-import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.cos
 import kotlin.math.sin
@@ -27,123 +25,26 @@ fun main() = KoolApplication(
 	config = KoolConfigJvm()
 ) {
 	// Initialize world with default configuration.
-	val world = World(WorldConfig(width = 256, height = 24))
 	val cursorTexture = mutableStateOf<Texture2d?>(null)
 	val fpsText = mutableStateOf("FPS: --")
+	val hudFont = mutableStateOf<Font?>(null)
 	val meshesText = mutableStateOf("Meshes: --")
 	val noclipText = mutableStateOf("")
-	val hudFont = mutableStateOf<Font?>(null)
+	val world = World(WorldConfig(renderDistance = 32))
 
 	addScene {
-		// Initialize player
-		val player = Player(world)
-
-		// Setup basic camera and background color.
 		camera = PerspectiveCamera()
 		clearColor = ClearColorFill(BACKGROUND)
 
+		val player = Player(world)
+		val voxelShader = AtomicReference<KslShader?>(null)
 		val worldNode = Node()
 		addNode(worldNode)
-		val voxelShader = AtomicReference<KslShader?>(null)
 
-		var needsRefresh = true
-		val isRefreshing = AtomicBoolean(false)
-		val worldIsGenerated = AtomicBoolean(false)
-		val pendingMeshes = AtomicReference<List<Mesh<*>>?>(null)
-		val incrementalMeshes = ConcurrentLinkedQueue<Mesh<*>>()
-		val clearWorldRequested = AtomicBoolean(false)
-		val earlyRespawnRequested = AtomicBoolean(false)
-		val firstColumnGenerated = AtomicBoolean(false)
-
-		/**
-		 * Clears existing world meshes and rebuilds them. 
-		 * This is called on startup and whenever the seed changes.
-		 */
-		fun refreshWorldMesh(regenerateWorld: Boolean = false) {
-			if (isRefreshing.get()) return
-			val shader = voxelShader.get() ?: return
-
-			isRefreshing.set(true)
-			firstColumnGenerated.set(false)
-
-			if (regenerateWorld || !worldIsGenerated.get()) {
-				player.physicsEnabled = false
-			}
-
-			CoroutineScope(BackendScope.job).launch {
-				if (regenerateWorld || !worldIsGenerated.get()) {
-					clearWorldRequested.set(true)
-
-					val regionFirstColumnGenerated = mutableSetOf<Pair<Int, Int>>()
-
-					world.generateAll { cx, cz ->
-						val rx = cx / REGION_SIZE
-						val rz = cz / REGION_SIZE
-
-						// Only generate the region mesh if we haven't already started it for this region
-						// or if we want to update it. Here, we'll wait for the whole region to be generated 
-						// for simplicity, or we can update it incrementally.
-						// To keep the "incremental" feel, we can re-generate the region mesh 
-						// every time a column in it is generated, but that's inefficient.
-						// Better: Generate region mesh only once all columns in a region are ready.
-
-						val regionReady = (0 until REGION_SIZE).all { lcx ->
-							(0 until REGION_SIZE).all { lcz ->
-								val gcx = rx * REGION_SIZE + lcx
-								val gcz = rz * REGION_SIZE + lcz
-								if (gcx >= world.config.worldWidth || gcz >= world.config.worldDepth) true
-								else world.chunks.containsKey(Vec3i(gcx, 0, gcz))
-							}
-						}
-
-						if (regionReady && regionFirstColumnGenerated.add(rx to rz)) {
-							val regionMesh = generateRegionMesh(world, shader, rx, rz)
-							if (regionMesh != null) {
-								incrementalMeshes.add(regionMesh)
-								if (firstColumnGenerated.compareAndSet(false, true)) {
-									earlyRespawnRequested.set(true)
-								}
-							}
-						}
-					}
-					worldIsGenerated.set(true)
-					isRefreshing.set(false)
-				} else {
-					pendingMeshes.set(generateWorldMeshes(world, shader, player.position.x, player.position.z))
-				}
-			}
-		}
+		val worldManager = WorldManager(world, player, worldNode, voxelShader)
 
 		onUpdate += {
-			if (clearWorldRequested.getAndSet(false)) {
-				worldNode.children.forEach { if (it is Mesh<*>) it.release() }
-				worldNode.clearChildren()
-			}
-
-			if (earlyRespawnRequested.getAndSet(false)) {
-				player.respawn()
-				player.physicsEnabled = true
-			}
-
-			// Handle incremental mesh updates
-			while (incrementalMeshes.peek() != null) {
-				incrementalMeshes.poll()?.let { worldNode.addNode(it) }
-			}
-
-			pendingMeshes.getAndSet(null)?.let { meshes ->
-				worldNode.children.forEach { if (it is Mesh<*>) it.release() }
-				worldNode.clearChildren()
-				meshes.forEach { worldNode.addNode(it) }
-
-				player.respawn()
-				player.physicsEnabled = true
-				isRefreshing.set(false)
-			}
-
-			if (needsRefresh && voxelShader.get() != null) {
-				needsRefresh = false
-				refreshWorldMesh()
-			}
+			worldManager.update(Time.deltaT)
 			player.update(Time.deltaT)
 
 			// Update look direction
@@ -173,6 +74,27 @@ fun main() = KoolApplication(
 			)
 
 			camera.lookAt.set(camera.position).add(lookDir)
+
+			// Noclip speed adjustments
+			val scroll = PointerInput.primaryPointer.scroll.y
+			if (scroll != 0f) {
+				player.noclipSpeed = (player.noclipSpeed + scroll * 2f).coerceIn(1f, 400f)
+			}
+
+			// Update HUD stats
+			if (Time.frameCount % 20 == 0) {
+				val totalMeshes = worldNode.children.filterIsInstance<Mesh<*>>().size
+				val visibleMeshes = worldNode.children.filterIsInstance<Mesh<*>>().count {
+					camera.isInFrustum(it)
+				}
+				fpsText.set("FPS: ${Time.fps.toInt()}")
+				meshesText.set("Meshes: $visibleMeshes / $totalMeshes")
+				if (player.isNoclip) {
+					noclipText.set("NOCLIP (Speed: ${player.noclipSpeed.toInt()})")
+				} else {
+					noclipText.set("")
+				}
+			}
 		}
 
 		// Register player movement keys
@@ -233,14 +155,14 @@ fun main() = KoolApplication(
 			}
 
 			// Initial mesh generation.
-			refreshWorldMesh()
+			worldManager.refreshWorldMesh()
 		}
 
 		// Listen for 'R' key to regenerate the world with a new random seed.
 		val keyListener = KeyboardInput.addKeyListener(UniversalKeyCode('R'), "Regenerate") {
-			if (it.isPressed && !isRefreshing.get()) {
+			if (it.isPressed && !worldManager.isRefreshing.get()) {
 				world.config = world.config.copy(seed = Random.nextLong())
-				refreshWorldMesh(regenerateWorld = true)
+				worldManager.refreshWorldMesh(regenerateWorld = true)
 			}
 		}
 
@@ -257,12 +179,6 @@ fun main() = KoolApplication(
 			}
 		}
 
-		onUpdate += {
-			val scroll = PointerInput.primaryPointer.scroll.y
-			if (scroll != 0f) {
-				player.noclipSpeed = (player.noclipSpeed + scroll * 2f).coerceIn(1f, 400f)
-			}
-		}
 
 		// Cleanup listeners and meshes when the scene is released.
 		onRelease {
@@ -274,21 +190,6 @@ fun main() = KoolApplication(
 			worldNode.children.forEach { if (it is Mesh<*>) it.release() }
 		}
 
-		onUpdate += {
-			if (Time.frameCount % 20 == 0) {
-				val totalMeshes = worldNode.children.filterIsInstance<Mesh<*>>().size
-				val visibleMeshes = worldNode.children.filterIsInstance<Mesh<*>>().count {
-					camera.isInFrustum(it)
-				}
-				fpsText.set("FPS: ${Time.fps.toInt()}")
-				meshesText.set("Meshes: $visibleMeshes / $totalMeshes")
-				if (player.isNoclip) {
-					noclipText.set("NOCLIP (Speed: ${player.noclipSpeed.toInt()})")
-				} else {
-					noclipText.set("")
-				}
-			}
-		}
 	}
 
 	addScene {

@@ -1,5 +1,6 @@
+
 import de.fabmax.kool.math.Vec3i
-import kotlinx.coroutines.*
+import kotlinx.coroutines.yield
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
@@ -8,18 +9,16 @@ import kotlin.random.Random
  */
 data class WorldConfig(
 	val chunkSize: Int = 16,
-	val worldWidth: Int = 32,   // Width in chunks (32 * 16 = 512 blocks)
-	val worldDepth: Int = 32,   // Depth in chunks (32 * 16 = 512 blocks)
-	val worldHeight: Int = 16,  // Height in chunks (16 * 16 = 256 blocks)
+	val dirtBlockId: Int = 1,
+	val grassBlockId: Int = 0,
+	val renderDistance: Int = 12,
 	val seed: Long = Random.nextLong(),
 	val stoneBlockId: Int = 2,
-	val grassBlockId: Int = 0,
-	val dirtBlockId: Int = 1,
+	val worldHeight: Int = 16,
 ) {
 	constructor(width: Int, height: Int, seed: Long = Random.nextLong()) : this(
-		worldWidth = width,
-		worldDepth = width,
 		worldHeight = height,
+		renderDistance = width / 2,
 		seed = seed,
 	)
 }
@@ -29,9 +28,12 @@ data class WorldConfig(
  * Using 3D chunking allows for better mesh culling and larger worlds.
  */
 @OptIn(ExperimentalUnsignedTypes::class)
-class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
-	// Stores all solid blocks in this chunk.
-	// 255 represents air (no block).
+data class Chunk(
+	val config: WorldConfig,
+	val cx: Int,
+	val cy: Int,
+	val cz: Int
+) {
 	private var _blocks: UByteArray? = null
 	var isEmpty = true
 		private set
@@ -55,9 +57,10 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 	}
 
 	suspend fun generateFromSurface(columnSurfaces: IntArray) {
-		val startY = cy * config.chunkSize
 		val chunkSize = config.chunkSize
 		val chunkSizeSq = chunkSize * chunkSize
+		val startY = cy * chunkSize
+		val endY = startY + chunkSize - 1
 
 		for (lx in 0..<chunkSize) {
 			if (lx % 4 == 0) yield()
@@ -67,19 +70,20 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 				// Quick check: if the entire chunk is above surfaceY, it's empty
 				if (startY > surfaceY) continue
 
+				val blocks = _blocks ?: UByteArray(chunkSize * chunkSize * chunkSize) { 255u }.also { _blocks = it }
+				isEmpty = false
+				
 				val baseIndex = lx * chunkSizeSq + lz
-				for (ly in 0..<chunkSize) {
-					val worldY = startY + ly
-					if (worldY <= surfaceY) {
-						val id = when {
-							worldY == surfaceY -> config.grassBlockId
-							worldY > surfaceY - 3 -> config.dirtBlockId
-							else -> config.stoneBlockId
-						}
-						val b = _blocks ?: UByteArray(chunkSize * chunkSize * chunkSize) { 255u }.also { _blocks = it }
-						b[baseIndex + ly * chunkSize] = id.toUByte()
-						if (id != -1) isEmpty = false
+				val fillMaxY = if (surfaceY > endY) endY else surfaceY
+
+				for (worldY in startY..fillMaxY) {
+					val ly = worldY - startY
+					val id = when {
+						worldY == surfaceY -> config.grassBlockId
+						worldY > surfaceY - 3 -> config.dirtBlockId
+						else -> config.stoneBlockId
 					}
+					blocks[baseIndex + ly * chunkSize] = id.toUByte()
 				}
 			}
 		}
@@ -89,60 +93,40 @@ class Chunk(val cx: Int, val cy: Int, val cz: Int, val config: WorldConfig) {
 data class World(var config: WorldConfig) {
 	// Map keyed by chunk coordinates (cx, cy, cz).
 	val chunks = ConcurrentHashMap<Vec3i, Chunk>()
+	private val generatingColumns = ConcurrentHashMap.newKeySet<Pair<Int, Int>>()
 	var isGenerating = false
 
-	suspend fun generateAll(onColumnGenerated: suspend (Int, Int) -> Unit = { _, _ -> }) =
-		withContext(Dispatchers.Default) {
-		isGenerating = true
-		Noise.setSeed(config.seed)
-		chunks.clear()
+	fun isColumnGenerated(cx: Int, cz: Int): Boolean {
+		if (!isWithinWorldLimitChunks(cx, cz)) return false
+		return chunks.containsKey(Vec3i(cx, 0, cz))
+	}
+
+	suspend fun generateColumn(cx: Int, cz: Int, onColumnGenerated: suspend (Int, Int) -> Unit = { _, _ -> }) {
+		if (!isWithinWorldLimitChunks(cx, cz)) return
+		if (generatingColumns.contains(cx to cz)) return
+		generatingColumns.add(cx to cz)
+		
 		val seaLevel = (config.worldHeight * config.chunkSize) / 2
+		val chunkSize = config.chunkSize
+		val columnSurfaces = IntArray(chunkSize * chunkSize)
+		val startX = cx * chunkSize
+		val startZ = cz * chunkSize
 
-		val centerX = config.worldWidth / 2
-		val centerZ = config.worldDepth / 2
-
-		val coords = mutableListOf<Pair<Int, Int>>()
-		for (cx in 0..<config.worldWidth) {
-			for (cz in 0..<config.worldDepth) {
-				coords.add(cx to cz)
+		for (lx in 0 until chunkSize) {
+			for (lz in 0 until chunkSize) {
+				columnSurfaces[lx * chunkSize + lz] = calculateSurfaceY(startX + lx, startZ + lz, seaLevel)
 			}
 		}
-		coords.sortBy { (cx, cz) ->
-			val dx = cx - centerX
-			val dz = cz - centerZ
-			dx * dx + dz * dz
+
+		for (cy in 0..<config.worldHeight) {
+			val chunk = Chunk(config, cx, cy, cz)
+			chunk.generateFromSurface(columnSurfaces)
+			chunks[Vec3i(cx, cy, cz)] = chunk
 		}
 
-		// Use a limited dispatcher to avoid saturating all cores
-		// and leave room for the UI/render thread.
-		val limitedDispatcher =
-			Dispatchers.Default.limitedParallelism(Runtime.getRuntime().availableProcessors().coerceAtLeast(2) - 1)
-
-		withContext(limitedDispatcher) {
-			coords.map { (cx, cz) ->
-				async {
-					val chunkSize = config.chunkSize
-					val columnSurfaces = IntArray(chunkSize * chunkSize)
-					val startX = cx * chunkSize
-					val startZ = cz * chunkSize
-
-					for (lx in 0 until chunkSize) {
-						for (lz in 0 until chunkSize) {
-							columnSurfaces[lx * chunkSize + lz] = calculateSurfaceY(startX + lx, startZ + lz, seaLevel)
-						}
-					}
-
-					for (cy in 0..<config.worldHeight) {
-						val chunk = Chunk(cx, cy, cz, config)
-						chunk.generateFromSurface(columnSurfaces)
-						chunks[Vec3i(cx, cy, cz)] = chunk
-					}
-					onColumnGenerated(cx, cz)
-				}
-			}.awaitAll()
-		}
-		isGenerating = false
-		}
+		generatingColumns.remove(cx to cz)
+		onColumnGenerated(cx, cz)
+	}
 
 	private fun calculateSurfaceY(worldX: Int, worldZ: Int, seaLevel: Int): Int {
 		val x = worldX.toDouble()
@@ -204,6 +188,7 @@ data class World(var config: WorldConfig) {
 	}
 
 	fun getBlockIdAt(x: Int, y: Int, z: Int): Int {
+		if (!isWithinWorldLimit(x, z)) return -1
 		val cx = if (x >= 0) x / config.chunkSize else (x + 1) / config.chunkSize - 1
 		val cy = if (y >= 0) y / config.chunkSize else (y + 1) / config.chunkSize - 1
 		val cz = if (z >= 0) z / config.chunkSize else (z + 1) / config.chunkSize - 1
@@ -216,6 +201,7 @@ data class World(var config: WorldConfig) {
 	}
 
 	fun setBlockIdAt(x: Int, y: Int, z: Int, id: Int) {
+		if (!isWithinWorldLimit(x, z)) return
 		val cx = if (x >= 0) x / config.chunkSize else (x + 1) / config.chunkSize - 1
 		val cy = if (y >= 0) y / config.chunkSize else (y + 1) / config.chunkSize - 1
 		val cz = if (z >= 0) z / config.chunkSize else (z + 1) / config.chunkSize - 1
@@ -224,14 +210,14 @@ data class World(var config: WorldConfig) {
 		val ly = y - cy * config.chunkSize
 		val lz = z - cz * config.chunkSize
 
-		val chunk = chunks.getOrPut(Vec3i(cx, cy, cz)) { Chunk(cx, cy, cz, config) }
+		val chunk = chunks.getOrPut(Vec3i(cx, cy, cz)) { Chunk(config, cx, cy, cz) }
 		chunk.setBlock(lx, ly, lz, id)
 	}
 
 	// For compatibility during transition, we keep getBlockAt but it will return a temporary BlockInstance
 	fun getBlockAt(x: Int, y: Int, z: Int): BlockInstance? {
 		val id = getBlockIdAt(x, y, z)
-		return if (id == -1) null else BlockInstance(x, y, z, id)
+		return if (id == -1) null else BlockInstance(id, x, y, z)
 	}
 
 	fun getHighestBlockY(x: Int, z: Int, range: Int = 1): Int {
@@ -247,5 +233,15 @@ data class World(var config: WorldConfig) {
 			}
 		}
 		return maxY
+	}
+
+	private fun isWithinWorldLimit(x: Int, z: Int): Boolean {
+		return x >= -WORLD_LIMIT && x < WORLD_LIMIT &&
+			z >= -WORLD_LIMIT && z < WORLD_LIMIT
+	}
+
+	private fun isWithinWorldLimitChunks(cx: Int, cz: Int): Boolean {
+		return cx >= -WORLD_LIMIT_CHUNKS && cx < WORLD_LIMIT_CHUNKS &&
+			cz >= -WORLD_LIMIT_CHUNKS && cz < WORLD_LIMIT_CHUNKS
 	}
 }

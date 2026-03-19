@@ -10,43 +10,40 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 class Player(val world: World) {
-	val position = MutableVec3f()
-	val velocity = MutableVec3f()
+	var cameraYOffset = 0f
+	val cameraYOffsetLerpSpeed = 10f
+	val depth = 1.9f
+	val gravity = 50f
+	val height = 3.8f
+	var isNoclip = false
+	val jumpSpeed = 16f
+	var noclipSpeed = 20f
 	var onGround = false
 	var physicsEnabled = false
-	var isNoclip = false
-	var noclipSpeed = 20f
+	var pitch = 0f
+	val position = MutableVec3f()
+	val stepHeight = 1.1f
+	val velocity = MutableVec3f()
+	val walkSpeed = 10f
+	val width = 1.9f
+	var yaw = 0f
 
 	init {
 		respawn()
 	}
 
-	var yaw = 0f
-	var pitch = 0f
-
-	val height = 3.8f
-	val width = 1.9f
-	val depth = 1.9f
-
-	val walkSpeed = 10f
-	val jumpSpeed = 16f
-	val gravity = 50f
-	val stepHeight = 1.1f
-	var cameraYOffset = 0f
-	val cameraYOffsetLerpSpeed = 10f
-
 	private val pressedKeys = mutableSetOf<Int>()
 
 	data object Controls {
-		val forward = listOf(UniversalKeyCode('W'), UniversalKeyCode('Z'), KeyboardInput.KEY_CURSOR_UP)
 		val backward = listOf(UniversalKeyCode('S'), KeyboardInput.KEY_CURSOR_DOWN)
-		val left = listOf(UniversalKeyCode('A'), UniversalKeyCode('Q'), KeyboardInput.KEY_CURSOR_LEFT)
-		val right = listOf(UniversalKeyCode('D'), KeyboardInput.KEY_CURSOR_RIGHT)
-		val jump = listOf(UniversalKeyCode(' '))
-		val respawn = listOf(KeyboardInput.KEY_ENTER)
 		val descend = listOf(KeyboardInput.KEY_SHIFT_LEFT, KeyboardInput.KEY_SHIFT_RIGHT)
+		val forward = listOf(UniversalKeyCode('W'), UniversalKeyCode('Z'), KeyboardInput.KEY_CURSOR_UP)
+		val jump = listOf(UniversalKeyCode(' '))
+		val left = listOf(UniversalKeyCode('A'), UniversalKeyCode('Q'), KeyboardInput.KEY_CURSOR_LEFT)
+		val respawn = listOf(KeyboardInput.KEY_ENTER)
+		val right = listOf(UniversalKeyCode('D'), KeyboardInput.KEY_CURSOR_RIGHT)
 
-		val allMovement = forward + backward + left + right + jump + descend
+		val allMovement = backward + descend + forward + jump + left + respawn + right
 	}
 
 	fun update(dt: Float) {
@@ -163,8 +160,8 @@ class Player(val world: World) {
 	}
 
 	fun respawn() {
-		val centerX = (world.config.worldWidth * world.config.chunkSize) / 2
-		val centerZ = (world.config.worldDepth * world.config.chunkSize) / 2
+		val centerX = 0
+		val centerZ = 0
 		val highestY = world.getHighestBlockY(centerX, centerZ)
 		position.set(centerX.toFloat() + 0.5f, highestY.toFloat() + 1.1f, centerZ.toFloat() + 0.5f)
 		velocity.set(0f, 0f, 0f)

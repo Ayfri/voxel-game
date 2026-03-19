@@ -34,7 +34,6 @@ class VoxelLayout : Struct("VoxelLayout", MemoryLayout.TightlyPacked) {
 
 val VOXEL_LAYOUT = VoxelLayout()
 
-const val REGION_SIZE = 4
 
 /**
  * Generates voxel world meshes using Greedy Meshing algorithm.
@@ -48,12 +47,14 @@ suspend fun generateWorldMeshes(
 	centerX: Float = 0f,
 	centerZ: Float = 0f
 ): List<Mesh<*>> = withContext(Dispatchers.Default) {
-	val worldChunks = world.chunks
 	val chunkSize = world.config.chunkSize
+	val worldChunks = world.chunks
 
 	// Group columns into regions of REGION_SIZE x REGION_SIZE
 	val regions = worldChunks.values.groupBy {
-		(it.cx / REGION_SIZE) to (it.cz / REGION_SIZE)
+		val rx = if (it.cx >= 0) it.cx / REGION_SIZE else (it.cx - REGION_SIZE + 1) / REGION_SIZE
+		val rz = if (it.cz >= 0) it.cz / REGION_SIZE else (it.cz - REGION_SIZE + 1) / REGION_SIZE
+		rx to rz
 	}
 
 	val sortedRegionKeys = regions.keys.sortedBy { (rx, rz) ->
@@ -79,10 +80,9 @@ fun generateRegionMesh(
 	rx: Int,
 	rz: Int
 ): Mesh<*>? {
-	val worldChunks = world.chunks
 	val chunkSize = world.config.chunkSize
-
 	val regionChunks = mutableListOf<Chunk>()
+	val worldChunks = world.chunks
 	for (cx in rx * REGION_SIZE until (rx + 1) * REGION_SIZE) {
 		for (cz in rz * REGION_SIZE until (rz + 1) * REGION_SIZE) {
 			for (cy in 0 until world.config.worldHeight) {
@@ -97,11 +97,11 @@ fun generateRegionMesh(
 	mesh.shader = voxelShader
 	mesh.isFrustumChecked = true
 	val mask = getMask(chunkSize)
+	val n = MutableVec3f()
 	val p0 = MutableVec3f()
 	val p1 = MutableVec3f()
 	val p2 = MutableVec3f()
 	val p3 = MutableVec3f()
-	val n = MutableVec3f()
 	val uv0 = MutableVec2f()
 	val uv1 = MutableVec2f()
 	val uv2 = MutableVec2f()
