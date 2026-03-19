@@ -32,6 +32,16 @@ suspend fun buildTextureArray(blocksDir: File): Texture3d {
 		TEXTURE_INDEX_MAP[file.nameWithoutExtension] = index
 	}
 
+	// Update block texture indices
+	BLOCKS.forEach { block ->
+		block.texIndices[0] = TEXTURE_INDEX_MAP[block.xSideTexture] ?: 0 // +X
+		block.texIndices[1] = TEXTURE_INDEX_MAP[block.xSideTexture] ?: 0 // -X
+		block.texIndices[2] = TEXTURE_INDEX_MAP[block.topTexture] ?: 0   // +Y
+		block.texIndices[3] = TEXTURE_INDEX_MAP[block.bottomTexture] ?: 0 // -Y
+		block.texIndices[4] = TEXTURE_INDEX_MAP[block.zSideTexture] ?: 0 // +Z
+		block.texIndices[5] = TEXTURE_INDEX_MAP[block.zSideTexture] ?: 0 // -Z
+	}
+
 	// Combine individual images into a single 3D texture array with nearest filtering
 	// to preserve the pixel-art look and REPEAT to support large merged quads.
 	return ImageData2dArray(loadedImages).toTexture(

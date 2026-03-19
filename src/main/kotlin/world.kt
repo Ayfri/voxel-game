@@ -35,7 +35,7 @@ data class Chunk(
 	val cy: Int,
 	val cz: Int
 ) {
-	private var _blocks: UByteArray? = null
+	internal var blocks: UByteArray? = null
 	var isEmpty = true
 		private set
 
@@ -43,16 +43,16 @@ data class Chunk(
 
 	fun setBlock(lx: Int, ly: Int, lz: Int, id: Int) {
 		val uId = id.toUByte()
-		if (uId == 255u.toUByte() && _blocks == null) return
+		if (uId == 255u.toUByte() && blocks == null) return
 
 		val b =
-			_blocks ?: UByteArray(config.chunkSize * config.chunkSize * config.chunkSize) { 255u }.also { _blocks = it }
+			blocks ?: UByteArray(config.chunkSize * config.chunkSize * config.chunkSize) { 255u }.also { blocks = it }
 		b[getIndex(lx, ly, lz)] = uId
 		if (uId != 255u.toUByte()) isEmpty = false
 	}
 
 	fun getBlock(lx: Int, ly: Int, lz: Int): Int {
-		val b = _blocks ?: return -1
+		val b = blocks ?: return -1
 		val id = b[getIndex(lx, ly, lz)].toInt()
 		return if (id == 255) -1 else id
 	}
@@ -71,7 +71,7 @@ data class Chunk(
 				// Quick check: if the entire chunk is above surfaceY, it's empty
 				if (startY > surfaceY) continue
 
-				val blocks = _blocks ?: UByteArray(chunkSize * chunkSize * chunkSize) { 255u }.also { _blocks = it }
+				val b = blocks ?: UByteArray(chunkSize * chunkSize * chunkSize) { 255u }.also { blocks = it }
 				isEmpty = false
 				
 				val baseIndex = lx * chunkSizeSq + lz
@@ -84,7 +84,7 @@ data class Chunk(
 						worldY > surfaceY - 3 -> config.dirtBlockId
 						else -> config.stoneBlockId
 					}
-					blocks[baseIndex + ly * chunkSize] = id.toUByte()
+					b[baseIndex + ly * chunkSize] = id.toUByte()
 				}
 			}
 		}
@@ -94,21 +94,38 @@ data class Chunk(
 data class World(var config: WorldConfig) {
 	// Map keyed by chunk coordinates (cx, cy, cz).
 	val chunks = ConcurrentHashMap<Vec3i, Chunk>()
+	private val worldScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 	private val generatingColumns = ConcurrentHashMap<Pair<Int, Int>, Deferred<Unit>>()
+	private val generatedColumns = ConcurrentHashMap.newKeySet<Pair<Int, Int>>()
 	var isGenerating = false
 
-	fun isColumnGenerated(cx: Int, cz: Int): Boolean {
-		// Vérification de tous les chunks de la colonne pour s'assurer qu'elle est complète dans la map
-		for (cy in 0 until config.worldHeight) {
-			if (!chunks.containsKey(Vec3i(cx, cy, cz))) return false
+	fun cleanupChunks(playerPos: Vec3i, renderDistance: Int) {
+		val chunkSize = config.chunkSize
+		val px = playerPos.x / chunkSize
+		val pz = playerPos.z / chunkSize
+		val unloadDistSq = (renderDistance + REGION_SIZE) * (renderDistance + REGION_SIZE)
+
+		val removedColumns = mutableSetOf<Pair<Int, Int>>()
+		chunks.keys.removeIf {
+			val dx = it.x - px
+			val dz = it.z - pz
+			val remove = dx * dx + dz * dz > unloadDistSq
+			if (remove) {
+				removedColumns.add(it.x to it.z)
+			}
+			remove
 		}
-		return true
+		generatedColumns.removeAll(removedColumns)
+	}
+
+	fun isColumnGenerated(cx: Int, cz: Int): Boolean {
+		return generatedColumns.contains(cx to cz)
 	}
 
 	suspend fun generateColumn(cx: Int, cz: Int, onColumnGenerated: suspend (Int, Int) -> Unit = { _, _ -> }) {
 		val key = cx to cz
 		val deferred = generatingColumns.getOrPut(key) {
-			CoroutineScope(Dispatchers.Default).async {
+			worldScope.async {
 				val seaLevel = (config.worldHeight * config.chunkSize) / 2
 				val chunkSize = config.chunkSize
 				val columnSurfaces = IntArray(chunkSize * chunkSize)
@@ -136,6 +153,7 @@ data class World(var config: WorldConfig) {
 		// Un seul gagne pour le remove, mais c'est pas grave
 		if (generatingColumns[key] == deferred) {
 			generatingColumns.remove(key)
+			generatedColumns.add(key)
 		}
 		
 		onColumnGenerated(cx, cz)
@@ -167,7 +185,7 @@ data class World(var config: WorldConfig) {
 		val globalVariation = Noise.fractal(
 			tx / 3000.0,
 			tz / 3000.0,
-			octaves = 1
+			octaves = 2
 		) * 0.25
 
 		// Base plains terrain (flat but slightly uneven)

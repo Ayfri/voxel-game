@@ -4,9 +4,7 @@ import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.scene.Mesh
 import de.fabmax.kool.scene.Node
 import de.fabmax.kool.util.BackendScope
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -26,16 +24,18 @@ class WorldManager(
 	val clearWorldRequested = AtomicBoolean(false)
 	val earlyRespawnRequested = AtomicBoolean(false)
 	val firstColumnGenerated = AtomicBoolean(false)
-	val incrementalMeshes = ConcurrentLinkedQueue<Mesh<*>>()
 	val isRefreshing = AtomicBoolean(false)
 	val loadingRegions = ConcurrentHashMap.newKeySet<Pair<Int, Int>>()
 	val meshingRegions = ConcurrentHashMap.newKeySet<Pair<Int, Int>>()
-	val removedMeshes = ConcurrentLinkedQueue<Mesh<*>>()
+	val pendingUpdates = ConcurrentLinkedQueue<MeshUpdate>()
 	val worldIsGenerated = AtomicBoolean(false)
 	private var worldScope = CoroutineScope(BackendScope.job)
 
+	private var frameCount = 0
 	private val meshesToRelease = mutableListOf<Mesh<*>>()
 	private val nextFrameRelease = mutableListOf<Mesh<*>>()
+
+	data class MeshUpdate(val rCoord: Pair<Int, Int>, val newMesh: Mesh<*>?, val oldMesh: Mesh<*>?)
 
 	fun refreshWorldMesh(regenerateWorld: Boolean = false) {
 		if (isRefreshing.get()) return
@@ -51,8 +51,7 @@ class WorldManager(
 			worldScope = CoroutineScope(BackendScope.job)
 			activeRegions.clear()
 			loadingRegions.clear()
-			incrementalMeshes.clear()
-			removedMeshes.clear()
+			pendingUpdates.clear()
 			world.chunks.clear()
 			clearWorldRequested.set(true)
 			worldIsGenerated.set(false)
@@ -82,33 +81,42 @@ class WorldManager(
 
 				for (rCoord in initialRegions) {
 					if (!activeRegions.containsKey(rCoord) && loadingRegions.add(rCoord)) {
-						val rx = rCoord.first
-						val rz = rCoord.second
+						worldScope.launch {
+							try {
+								val rx = rCoord.first
+								val rz = rCoord.second
 
-						// Generate ALL chunks of this region + 1 chunk border before meshing
-						for (lcx in -1..REGION_SIZE) {
-							for (lcz in -1..REGION_SIZE) {
-								val gcx = rx * REGION_SIZE + lcx
-								val gcz = rz * REGION_SIZE + lcz
+								// Generate ALL chunks of this region + 1 chunk border before meshing in parallel
+								coroutineScope {
+									val jobs = mutableListOf<Deferred<Unit>>()
+									for (lcx in -1..REGION_SIZE) {
+										for (lcz in -1..REGION_SIZE) {
+											val gcx = rx * REGION_SIZE + lcx
+											val gcz = rz * REGION_SIZE + lcz
 
-								if (!isWithinWorldLimit(gcx, gcz)) continue
+											if (!isWithinWorldLimit(gcx, gcz)) continue
 
-								if (!world.isColumnGenerated(gcx, gcz)) {
-									world.generateColumn(gcx, gcz)
+											if (!world.isColumnGenerated(gcx, gcz)) {
+												jobs.add(async { world.generateColumn(gcx, gcz) })
+											}
+										}
+									}
+									jobs.awaitAll()
 								}
-							}
-						}
 
-						val mesh = generateRegionMesh(world, shader, rx, rz)
-						if (mesh != null) {
-							activeRegions.put(rCoord, mesh)?.let { removedMeshes.add(it) }
-							incrementalMeshes.add(mesh)
-							if (firstColumnGenerated.compareAndSet(false, true)) {
-								earlyRespawnRequested.set(true)
+								val mesh = generateRegionMesh(world, shader, rx, rz)
+								if (mesh != null) {
+									val old = activeRegions.put(rCoord, mesh)
+									pendingUpdates.add(MeshUpdate(rCoord, mesh, old))
+									if (firstColumnGenerated.compareAndSet(false, true)) {
+										earlyRespawnRequested.set(true)
+									}
+									triggerNeighborRemesh(rx, rz)
+								}
+							} finally {
+								loadingRegions.remove(rCoord)
 							}
-							triggerNeighborRemesh(rx, rz)
 						}
-						loadingRegions.remove(rCoord)
 					}
 				}
 				worldIsGenerated.set(true)
@@ -136,9 +144,21 @@ class WorldManager(
 			player.physicsEnabled = true
 		}
 
-		// Handle incremental mesh updates
-		while (incrementalMeshes.peek() != null) {
-			incrementalMeshes.poll()?.let { worldNode.addNode(it) }
+		// Handle atomized mesh updates (fix for flickering)
+		while (pendingUpdates.peek() != null) {
+			val update = pendingUpdates.poll() ?: break
+			if (update.newMesh != null) {
+				if (activeRegions[update.rCoord] == update.newMesh) {
+					worldNode.addNode(update.newMesh)
+				} else {
+					// This mesh was already superseded by a newer one
+					nextFrameRelease.add(update.newMesh)
+				}
+			}
+			if (update.oldMesh != null) {
+				worldNode.removeNode(update.oldMesh)
+				nextFrameRelease.add(update.oldMesh)
+			}
 		}
 
 		// Dynamic world loading
@@ -192,30 +212,38 @@ class WorldManager(
 			candidateRegions.sortBy { it.second }
 
 			for (candidate in candidateRegions.take(8)) { // Load up to 8 regions per update
+				if (loadingRegions.size >= 16) break // Limit concurrent region loads
 				val rCoord = candidate.first
 				val rx = rCoord.first
 				val rz = rCoord.second
 				if (loadingRegions.add(rCoord)) {
 					worldScope.launch {
-						for (lcx in -1..REGION_SIZE) {
-							for (lcz in -1..REGION_SIZE) {
-								val gcx = rx * REGION_SIZE + lcx
-								val gcz = rz * REGION_SIZE + lcz
+						try {
+							coroutineScope {
+								val jobs = mutableListOf<Deferred<Unit>>()
+								for (lcx in -1..REGION_SIZE) {
+									for (lcz in -1..REGION_SIZE) {
+										val gcx = rx * REGION_SIZE + lcx
+										val gcz = rz * REGION_SIZE + lcz
 
-								if (!isWithinWorldLimit(gcx, gcz)) continue
+										if (!isWithinWorldLimit(gcx, gcz)) continue
 
-								if (!world.isColumnGenerated(gcx, gcz)) {
-									world.generateColumn(gcx, gcz)
+										if (!world.isColumnGenerated(gcx, gcz)) {
+											jobs.add(async { world.generateColumn(gcx, gcz) })
+										}
+									}
 								}
+								jobs.awaitAll()
 							}
+							val mesh = generateRegionMesh(world, shader, rx, rz)
+							if (mesh != null) {
+								val old = activeRegions.put(rCoord, mesh)
+								pendingUpdates.add(MeshUpdate(rCoord, mesh, old))
+								triggerNeighborRemesh(rx, rz)
+							}
+						} finally {
+							loadingRegions.remove(rCoord)
 						}
-						val mesh = generateRegionMesh(world, shader, rx, rz)
-						if (mesh != null) {
-							activeRegions.put(rCoord, mesh)?.let { removedMeshes.add(it) }
-							incrementalMeshes.add(mesh)
-							triggerNeighborRemesh(rx, rz)
-						}
-						loadingRegions.remove(rCoord)
 					}
 				}
 			}
@@ -223,26 +251,38 @@ class WorldManager(
 			// Unload distant regions
 			val unloadDistance = (renderDistanceChunks + REGION_SIZE) * chunkSize
 			val unloadDistanceSq = (unloadDistance * unloadDistance).toFloat()
-			val toRemove = activeRegions.keys.filter { (rx, rz) ->
+
+			val regionIter = activeRegions.entries.iterator()
+			while (regionIter.hasNext()) {
+				val entry = regionIter.next()
+				val rCoord = entry.key
+				val rx = rCoord.first
+				val rz = rCoord.second
 				val regionCenterX = (rx * REGION_SIZE + REGION_SIZE / 2f) * chunkSize
 				val regionCenterZ = (rz * REGION_SIZE + REGION_SIZE / 2f) * chunkSize
 				val dx = regionCenterX - player.position.x
 				val dz = regionCenterZ - player.position.z
 				val dSq = dx * dx + dz * dz
-				dSq > unloadDistanceSq
+				if (dSq > unloadDistanceSq) {
+					regionIter.remove()
+					pendingUpdates.add(MeshUpdate(rCoord, null, entry.value))
+				}
 			}
-			toRemove.forEach { rCoord ->
-				activeRegions.remove(rCoord)?.let { removedMeshes.add(it) }
+
+			// Clean up distant chunks from the world map to save memory
+			if (frameCount++ % 100 == 0) {
+				world.cleanupChunks(
+					de.fabmax.kool.math.Vec3i(
+						player.position.x.toInt(),
+						player.position.y.toInt(),
+						player.position.z.toInt()
+					),
+					world.config.renderDistance
+				)
 			}
 		}
 
-		// Handle removed meshes
-		while (removedMeshes.peek() != null) {
-			removedMeshes.poll()?.let {
-				worldNode.removeNode(it)
-				nextFrameRelease.add(it)
-			}
-		}
+		// Independent removed meshes are now handled via pendingUpdates queue
 	}
 
 	private fun isWithinWorldLimit(cx: Int, cz: Int): Boolean {
@@ -257,8 +297,8 @@ class WorldManager(
 				try {
 					val mesh = generateRegionMesh(world, shader, rCoord.first, rCoord.second)
 					if (mesh != null) {
-						activeRegions.put(rCoord, mesh)?.let { removedMeshes.add(it) }
-						incrementalMeshes.add(mesh)
+						val old = activeRegions.put(rCoord, mesh)
+						pendingUpdates.add(MeshUpdate(rCoord, mesh, old))
 					}
 				} finally {
 					meshingRegions.remove(rCoord)

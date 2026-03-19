@@ -31,6 +31,17 @@ class VoxelLayout : Struct("VoxelLayout", MemoryLayout.TightlyPacked) {
 
 val VOXEL_LAYOUT = VoxelLayout()
 
+val SHADE_COLORS = Array(6) { d ->
+	val shade = when (d) {
+		0, 1 -> 0.8f
+		2 -> 1.0f
+		3 -> 0.5f
+		4, 5 -> 0.75f
+		else -> 1.0f
+	}
+	Color(shade, shade, shade, 1f)
+}
+
 
 /**
  * Generates voxel world meshes using Greedy Meshing algorithm.
@@ -123,27 +134,26 @@ suspend fun generateRegionMesh(
 	val uv2 = MutableVec2f()
 	val uv3 = MutableVec2f()
 
+	// Pre-calculate block texture indices for all 6 directions to avoid redundant lookups
+	val blockTexIndicesByDir = Array(6) { d ->
+		IntArray(BLOCKS.size) { blockId -> BLOCKS[blockId].texIndices[d] }
+	}
+
 	// Use a single MeshBuilder and iterate chunks with yield for cancellation
 	val builder = MeshBuilder(mesh.geometry)
-	regionChunks.forEach { chunk ->
-		yield()
-		if (chunk.isEmpty) return@forEach
+	regionChunks.forEachIndexed { i, chunk ->
+		if (i % 64 == 0) yield()
+		val blocks = chunk.blocks ?: return@forEachIndexed
+
+		val fx = (chunk.cx * chunkSize).toFloat()
+		val fy = (chunk.cy * chunkSize).toFloat()
+		val fz = (chunk.cz * chunkSize).toFloat()
 
 		// Greedy meshing algorithm implementation
 
 		// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
 		for (d in 0..5) {
-			val blockTexIndices = IntArray(BLOCKS.size) { blockId ->
-				val block = BLOCKS[blockId]
-				val texName = when (d) {
-					0, 1 -> block.xSideTexture
-					2 -> block.topTexture
-					3 -> block.bottomTexture
-					4, 5 -> block.zSideTexture
-					else -> ""
-				}
-				TEXTURE_INDEX_MAP[texName] ?: 0
-			}
+			val blockTexIndices = blockTexIndicesByDir[d]
 
 			val axis = d / 2
 			val isBackFace = d % 2 == 1
@@ -160,58 +170,92 @@ suspend fun generateRegionMesh(
 					chunkCache[(ncx * worldHeight + ncy) * cacheDepth + ncz]
 				} else null
 
+			val nBlocks = neighborChunk?.blocks
+
 			for (slice in 0 until chunkSize) {
 				mask.fill(-1)
+				var maskEmpty = true
 
 				// 1. Fill visibility mask for this slice
-				for (j in 0 until chunkSize) {
-					val rowOffset = j * chunkSize
-					for (i in 0 until chunkSize) {
-						val lx: Int
-						val ly: Int
-						val lz: Int
-						when (axis) {
-							0 -> {
-								lx = slice; ly = j; lz = i
-							}
-
-							1 -> {
-								lx = i; ly = slice; lz = j
-							}
-
-							else -> {
-								lx = i; ly = j; lz = slice
-							}
-						}
-
-						val blockId = chunk.getBlock(lx, ly, lz)
-						if (blockId != -1) {
-							val nlx = lx + dx
-							val nly = ly + dy
-							val nlz = lz + dz
-
-							val isVisible =
-								if (nlx in 0 until chunkSize && nly in 0 until chunkSize && nlz in 0 until chunkSize) {
-									chunk.getBlock(nlx, nly, nlz) == -1
-								} else {
-									if (neighborChunk != null) {
-										val nnlx = (nlx + chunkSize) % chunkSize
-										val nnly = (nly + chunkSize) % chunkSize
-										val nnlz = (nlz + chunkSize) % chunkSize
-										neighborChunk.getBlock(nnlx, nnly, nnlz) == -1
+				when (axis) {
+					0 -> { // X-axis (mask i=z, j=y)
+						val nlx = slice + dx
+						val useNeighbor = nlx < 0 || nlx >= chunkSize
+						val nnlx = (nlx + chunkSize) % chunkSize
+						for (j in 0 until chunkSize) {
+							val maskBase = j * chunkSize
+							val chunkBase = (slice * chunkSize + j) * chunkSize
+							val nBase =
+								if (useNeighbor) (nnlx * chunkSize + j) * chunkSize else (nlx * chunkSize + j) * chunkSize
+							for (i in 0 until chunkSize) {
+								val bId = blocks[chunkBase + i].toInt()
+								if (bId != 255) {
+									val isVisible = if (useNeighbor) {
+										if (nBlocks != null) nBlocks[nBase + i].toInt() == 255 else true
 									} else {
-										// If neighbor chunk is missing, show the face to avoid holes at loaded region boundaries.
-										// This face will be properly culled when the neighbor region is loaded and remeshes this one.
-										true
+										blocks[nBase + i].toInt() == 255
+									}
+									if (isVisible) {
+										mask[maskBase + i] = blockTexIndices[bId]
+										maskEmpty = false
 									}
 								}
+							}
+						}
+					}
 
-							if (isVisible) {
-								mask[i + rowOffset] = blockTexIndices[blockId]
+					1 -> { // Y-axis (mask i=x, j=z)
+						val nly = slice + dy
+						val useNeighbor = nly < 0 || nly >= chunkSize
+						val nnly = (nly + chunkSize) % chunkSize
+						for (j in 0 until chunkSize) { // z
+							val maskBase = j * chunkSize
+							for (i in 0 until chunkSize) { // x
+								val chunkIdx = (i * chunkSize + slice) * chunkSize + j
+								val bId = blocks[chunkIdx].toInt()
+								if (bId != 255) {
+									val nIdx = (i * chunkSize + (if (useNeighbor) nnly else nly)) * chunkSize + j
+									val isVisible = if (useNeighbor) {
+										if (nBlocks != null) nBlocks[nIdx].toInt() == 255 else true
+									} else {
+										blocks[nIdx].toInt() == 255
+									}
+									if (isVisible) {
+										mask[maskBase + i] = blockTexIndices[bId]
+										maskEmpty = false
+									}
+								}
+							}
+						}
+					}
+
+					else -> { // Z-axis (mask i=x, j=y)
+						val nlz = slice + dz
+						val useNeighbor = nlz < 0 || nlz >= chunkSize
+						val nnlz = (nlz + chunkSize) % chunkSize
+						for (j in 0 until chunkSize) { // y
+							val maskBase = j * chunkSize
+							for (i in 0 until chunkSize) { // x
+								val chunkIdx = (i * chunkSize + j) * chunkSize + slice
+								val bId = blocks[chunkIdx].toInt()
+								if (bId != 255) {
+									val nIdx = (i * chunkSize + j) * chunkSize + (if (useNeighbor) nnlz else nlz)
+									val isVisible = if (useNeighbor) {
+										if (nBlocks != null) nBlocks[nIdx].toInt() == 255 else true
+									} else {
+										blocks[nIdx].toInt() == 255
+									}
+									if (isVisible) {
+										mask[maskBase + i] = blockTexIndices[bId]
+										maskEmpty = false
+									}
+								}
 							}
 						}
 					}
 				}
+
+				if (maskEmpty) continue
 
 				// 2. Perform greedy merging on the mask
 				for (j in 0 until chunkSize) {
@@ -244,7 +288,7 @@ suspend fun generateRegionMesh(
 								w,
 								h,
 								texIndex,
-								chunk,
+								fx, fy, fz,
 								p0,
 								p1,
 								p2,
@@ -272,8 +316,12 @@ suspend fun generateRegionMesh(
 			}
 		}
 	}
-	mesh.updateGeometryBounds()
-	return mesh
+	if (mesh.geometry.numIndices > 0) {
+		mesh.updateGeometryBounds()
+		return mesh
+	}
+	mesh.release()
+	return null
 }
 
 /**
@@ -287,7 +335,9 @@ private fun MeshBuilder<VoxelLayout>.addGreedyFace(
 	w: Int,
 	h: Int,
 	texIndex: Int,
-	chunk: Chunk,
+	fx: Float,
+	fy: Float,
+	fz: Float,
 	p0: MutableVec3f,
 	p1: MutableVec3f,
 	p2: MutableVec3f,
@@ -298,23 +348,11 @@ private fun MeshBuilder<VoxelLayout>.addGreedyFace(
 	uv2: MutableVec2f,
 	uv3: MutableVec2f
 ) {
-	val chunkSize = chunk.config.chunkSize
-	val fx = (chunk.cx * chunkSize).toFloat()
-	val fy = (chunk.cy * chunkSize).toFloat()
-	val fz = (chunk.cz * chunkSize).toFloat()
-
 	val fw = w.toFloat()
 	val fh = h.toFloat()
 	val fs = slice.toFloat()
 
-	val shade = when (d) {
-		0, 1 -> 0.8f
-		2 -> 1.0f
-		3 -> 0.5f
-		4, 5 -> 0.75f
-		else -> 1.0f
-	}
-	color = Color(shade, shade, shade, 1f)
+	color = SHADE_COLORS[d]
 	vertexCustomizer = { layout -> set(layout.texIndex, texIndex.toFloat()) }
 
 	when (d) {

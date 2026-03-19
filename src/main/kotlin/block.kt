@@ -10,6 +10,8 @@ data class Block(
 	val xSideTexture: String,
 	val zSideTexture: String,
 ) {
+	// Pre-calculated texture indices for the 3D texture array
+	val texIndices = IntArray(6) { 0 }
 	// Simple block with the same texture on all faces.
 	constructor(name: String, texture: String) : this(texture, name, texture, texture, texture)
 
