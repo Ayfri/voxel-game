@@ -2,6 +2,7 @@
 import de.fabmax.kool.math.Vec3i
 import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.floor
 import kotlin.random.Random
 
 /**
@@ -97,7 +98,6 @@ data class World(var config: WorldConfig) {
 	var isGenerating = false
 
 	fun isColumnGenerated(cx: Int, cz: Int): Boolean {
-		if (!isWithinWorldLimitChunks(cx, cz)) return false
 		// Vérification de tous les chunks de la colonne pour s'assurer qu'elle est complète dans la map
 		for (cy in 0 until config.worldHeight) {
 			if (!chunks.containsKey(Vec3i(cx, cy, cz))) return false
@@ -106,8 +106,6 @@ data class World(var config: WorldConfig) {
 	}
 
 	suspend fun generateColumn(cx: Int, cz: Int, onColumnGenerated: suspend (Int, Int) -> Unit = { _, _ -> }) {
-		if (!isWithinWorldLimitChunks(cx, cz)) return
-
 		val key = cx to cz
 		val deferred = generatingColumns.getOrPut(key) {
 			CoroutineScope(Dispatchers.Default).async {
@@ -208,10 +206,9 @@ data class World(var config: WorldConfig) {
 	}
 
 	fun getBlockIdAt(x: Int, y: Int, z: Int): Int {
-		if (!isWithinWorldLimit(x, z)) return -1
-		val cx = if (x >= 0) x / config.chunkSize else (x + 1) / config.chunkSize - 1
-		val cy = if (y >= 0) y / config.chunkSize else (y + 1) / config.chunkSize - 1
-		val cz = if (z >= 0) z / config.chunkSize else (z + 1) / config.chunkSize - 1
+		val cx = floor(x.toDouble() / config.chunkSize).toInt()
+		val cy = floor(y.toDouble() / config.chunkSize).toInt()
+		val cz = floor(z.toDouble() / config.chunkSize).toInt()
 
 		val lx = x - cx * config.chunkSize
 		val ly = y - cy * config.chunkSize
@@ -221,10 +218,9 @@ data class World(var config: WorldConfig) {
 	}
 
 	fun setBlockIdAt(x: Int, y: Int, z: Int, id: Int) {
-		if (!isWithinWorldLimit(x, z)) return
-		val cx = if (x >= 0) x / config.chunkSize else (x + 1) / config.chunkSize - 1
-		val cy = if (y >= 0) y / config.chunkSize else (y + 1) / config.chunkSize - 1
-		val cz = if (z >= 0) z / config.chunkSize else (z + 1) / config.chunkSize - 1
+		val cx = floor(x.toDouble() / config.chunkSize).toInt()
+		val cy = floor(y.toDouble() / config.chunkSize).toInt()
+		val cz = floor(z.toDouble() / config.chunkSize).toInt()
 
 		val lx = x - cx * config.chunkSize
 		val ly = y - cy * config.chunkSize
@@ -256,12 +252,10 @@ data class World(var config: WorldConfig) {
 	}
 
 	private fun isWithinWorldLimit(x: Int, z: Int): Boolean {
-		return x >= -WORLD_LIMIT && x < WORLD_LIMIT &&
-			z >= -WORLD_LIMIT && z < WORLD_LIMIT
+		return true
 	}
 
 	private fun isWithinWorldLimitChunks(cx: Int, cz: Int): Boolean {
-		return cx >= -WORLD_LIMIT_CHUNKS && cx < WORLD_LIMIT_CHUNKS &&
-			cz >= -WORLD_LIMIT_CHUNKS && cz < WORLD_LIMIT_CHUNKS
+		return true
 	}
 }

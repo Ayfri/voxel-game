@@ -246,9 +246,7 @@ class WorldManager(
 	}
 
 	private fun isWithinWorldLimit(cx: Int, cz: Int): Boolean {
-		val limitChunks = WORLD_LIMIT_CHUNKS
-		return cx >= -limitChunks && cx < limitChunks &&
-			cz >= -limitChunks && cz < limitChunks
+		return true
 	}
 
 	private fun remeshRegion(rCoord: Pair<Int, Int>) {
