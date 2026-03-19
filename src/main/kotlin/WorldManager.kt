@@ -1,4 +1,4 @@
-
+import de.fabmax.kool.math.deg
 import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.scene.Mesh
 import de.fabmax.kool.scene.Node
@@ -9,7 +9,10 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.cos
 import kotlin.math.floor
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 class WorldManager(
 	val world: World,
@@ -38,6 +41,9 @@ class WorldManager(
 			player.physicsEnabled = false
 			activeRegions.clear()
 			loadingRegions.clear()
+			incrementalMeshes.clear()
+			removedMeshes.clear()
+			world.chunks.clear()
 			clearWorldRequested.set(true)
 			worldIsGenerated.set(false)
 		}
@@ -50,6 +56,7 @@ class WorldManager(
 				val playerCZ = floor(player.position.z / chunkSize).toInt()
 
 				val initialRadius = 2 // small radius to start fast
+				val initialRegions = mutableSetOf<Pair<Int, Int>>()
 				for (dx in -initialRadius..initialRadius) {
 					for (dz in -initialRadius..initialRadius) {
 						val cx = playerCX + dx
@@ -57,23 +64,40 @@ class WorldManager(
 
 						if (!isWithinWorldLimit(cx, cz)) continue
 
-						world.generateColumn(cx, cz)
-
 						val rx = if (cx >= 0) cx / REGION_SIZE else (cx - REGION_SIZE + 1) / REGION_SIZE
 						val rz = if (cz >= 0) cz / REGION_SIZE else (cz - REGION_SIZE + 1) / REGION_SIZE
-						val rCoord = rx to rz
+						initialRegions.add(rx to rz)
+					}
+				}
 
-						if (!activeRegions.containsKey(rCoord) && loadingRegions.add(rCoord)) {
-							val mesh = generateRegionMesh(world, shader, rx, rz)
-							if (mesh != null) {
-								activeRegions[rCoord] = mesh
-								incrementalMeshes.add(mesh)
-								if (firstColumnGenerated.compareAndSet(false, true)) {
-									earlyRespawnRequested.set(true)
+				for (rCoord in initialRegions) {
+					if (!activeRegions.containsKey(rCoord) && loadingRegions.add(rCoord)) {
+						val rx = rCoord.first
+						val rz = rCoord.second
+
+						// Generate ALL chunks of this region before meshing
+						for (lcx in 0 until REGION_SIZE) {
+							for (lcz in 0 until REGION_SIZE) {
+								val gcx = rx * REGION_SIZE + lcx
+								val gcz = rz * REGION_SIZE + lcz
+
+								if (!isWithinWorldLimit(gcx, gcz)) continue
+
+								if (!world.isColumnGenerated(gcx, gcz)) {
+									world.generateColumn(gcx, gcz)
 								}
 							}
-							loadingRegions.remove(rCoord)
 						}
+
+						val mesh = generateRegionMesh(world, shader, rx, rz)
+						if (mesh != null) {
+							activeRegions[rCoord] = mesh
+							incrementalMeshes.add(mesh)
+							if (firstColumnGenerated.compareAndSet(false, true)) {
+								earlyRespawnRequested.set(true)
+							}
+						}
+						loadingRegions.remove(rCoord)
 					}
 				}
 				worldIsGenerated.set(true)
@@ -114,6 +138,12 @@ class WorldManager(
 			val renderDistanceRegions = (renderDistanceChunks / REGION_SIZE) + 1
 			val rSq = (renderDistanceChunks * chunkSize).let { (it * it).toFloat() }
 
+			val radYaw = player.yaw.deg.rad
+			val lookX = sin(radYaw)
+			val lookZ = -cos(radYaw)
+
+			val candidateRegions = mutableListOf<Pair<Pair<Int, Int>, Float>>()
+
 			for (drx in -renderDistanceRegions..renderDistanceRegions) {
 				for (drz in -renderDistanceRegions..renderDistanceRegions) {
 					val rx = playerRX + drx
@@ -128,27 +158,46 @@ class WorldManager(
 					if (dSq > rSq) continue
 
 					val rCoord = rx to rz
-					if (!activeRegions.containsKey(rCoord) && loadingRegions.add(rCoord)) {
-						CoroutineScope(BackendScope.job).launch {
-							for (lcx in 0 until REGION_SIZE) {
-								for (lcz in 0 until REGION_SIZE) {
-									val gcx = rx * REGION_SIZE + lcx
-									val gcz = rz * REGION_SIZE + lcz
+					if (!activeRegions.containsKey(rCoord) && !loadingRegions.contains(rCoord)) {
+						val dist = sqrt(dSq)
+						var priority = dist
+						if (dist > 0.1f) {
+							val dot = (dx / dist) * lookX + (dz / dist) * lookZ
+							// Bonus if aligned with look direction (dot > 0)
+							priority -= dot * (chunkSize * REGION_SIZE * 2f)
+						}
+						candidateRegions.add(rCoord to priority)
+					}
+				}
+			}
 
-									if (!isWithinWorldLimit(gcx, gcz)) continue
+			// Sort by priority (lowest value first)
+			candidateRegions.sortBy { it.second }
 
-									if (!world.isColumnGenerated(gcx, gcz)) {
-										world.generateColumn(gcx, gcz)
-									}
+			for (candidate in candidateRegions.take(8)) { // Load up to 8 regions per update
+				val rCoord = candidate.first
+				val rx = rCoord.first
+				val rz = rCoord.second
+				if (loadingRegions.add(rCoord)) {
+					CoroutineScope(BackendScope.job).launch {
+						for (lcx in 0 until REGION_SIZE) {
+							for (lcz in 0 until REGION_SIZE) {
+								val gcx = rx * REGION_SIZE + lcx
+								val gcz = rz * REGION_SIZE + lcz
+
+								if (!isWithinWorldLimit(gcx, gcz)) continue
+
+								if (!world.isColumnGenerated(gcx, gcz)) {
+									world.generateColumn(gcx, gcz)
 								}
 							}
-							val mesh = generateRegionMesh(world, shader, rx, rz)
-							if (mesh != null) {
-								activeRegions[rCoord] = mesh
-								incrementalMeshes.add(mesh)
-							}
-							loadingRegions.remove(rCoord)
 						}
+						val mesh = generateRegionMesh(world, shader, rx, rz)
+						if (mesh != null) {
+							activeRegions[rCoord] = mesh
+							incrementalMeshes.add(mesh)
+						}
+						loadingRegions.remove(rCoord)
 					}
 				}
 			}

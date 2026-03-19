@@ -162,8 +162,8 @@ class Player(val world: World) {
 	fun respawn() {
 		val centerX = 0
 		val centerZ = 0
-		val highestY = world.getHighestBlockY(centerX, centerZ)
-		position.set(centerX.toFloat() + 0.5f, highestY.toFloat() + 1.1f, centerZ.toFloat() + 0.5f)
+		val surfaceY = world.getSurfaceY(centerX, centerZ)
+		position.set(centerX.toFloat() + 0.5f, surfaceY.toFloat() + 1.1f, centerZ.toFloat() + 0.5f)
 		velocity.set(0f, 0f, 0f)
 		yaw = 0f
 		pitch = 0f

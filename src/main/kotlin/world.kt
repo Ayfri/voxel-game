@@ -128,6 +128,11 @@ data class World(var config: WorldConfig) {
 		onColumnGenerated(cx, cz)
 	}
 
+	fun getSurfaceY(x: Int, z: Int): Int {
+		val seaLevel = (config.worldHeight * config.chunkSize) / 2
+		return calculateSurfaceY(x, z, seaLevel)
+	}
+
 	private fun calculateSurfaceY(worldX: Int, worldZ: Int, seaLevel: Int): Int {
 		val x = worldX.toDouble()
 		val z = worldZ.toDouble()
