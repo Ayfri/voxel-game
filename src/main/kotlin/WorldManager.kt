@@ -34,6 +34,9 @@ class WorldManager(
 	val worldIsGenerated = AtomicBoolean(false)
 	private var worldScope = CoroutineScope(BackendScope.job)
 
+	private val meshesToRelease = mutableListOf<Mesh<*>>()
+	private val nextFrameRelease = mutableListOf<Mesh<*>>()
+
 	fun refreshWorldMesh(regenerateWorld: Boolean = false) {
 		if (isRefreshing.get()) return
 		val shader = voxelShader.get() ?: return
@@ -82,9 +85,9 @@ class WorldManager(
 						val rx = rCoord.first
 						val rz = rCoord.second
 
-						// Generate ALL chunks of this region before meshing
-						for (lcx in 0 until REGION_SIZE) {
-							for (lcz in 0 until REGION_SIZE) {
+						// Generate ALL chunks of this region + 1 chunk border before meshing
+						for (lcx in -1..REGION_SIZE) {
+							for (lcz in -1..REGION_SIZE) {
 								val gcx = rx * REGION_SIZE + lcx
 								val gcz = rz * REGION_SIZE + lcz
 
@@ -117,8 +120,14 @@ class WorldManager(
 	}
 
 	fun update(dt: Float) {
+		// 1. Release meshes from the previous frame
+		meshesToRelease.forEach { it.release() }
+		meshesToRelease.clear()
+		meshesToRelease.addAll(nextFrameRelease)
+		nextFrameRelease.clear()
+
 		if (clearWorldRequested.getAndSet(false)) {
-			worldNode.children.forEach { if (it is Mesh<*>) it.release() }
+			worldNode.children.forEach { if (it is Mesh<*>) nextFrameRelease.add(it) }
 			worldNode.clearChildren()
 		}
 
@@ -188,8 +197,8 @@ class WorldManager(
 				val rz = rCoord.second
 				if (loadingRegions.add(rCoord)) {
 					worldScope.launch {
-						for (lcx in 0 until REGION_SIZE) {
-							for (lcz in 0 until REGION_SIZE) {
+						for (lcx in -1..REGION_SIZE) {
+							for (lcz in -1..REGION_SIZE) {
 								val gcx = rx * REGION_SIZE + lcx
 								val gcz = rz * REGION_SIZE + lcz
 
@@ -231,7 +240,7 @@ class WorldManager(
 		while (removedMeshes.peek() != null) {
 			removedMeshes.poll()?.let {
 				worldNode.removeNode(it)
-				it.release()
+				nextFrameRelease.add(it)
 			}
 		}
 	}
@@ -261,9 +270,11 @@ class WorldManager(
 	}
 
 	private fun triggerNeighborRemesh(rx: Int, rz: Int) {
-		remeshRegion(rx - 1 to rz)
-		remeshRegion(rx + 1 to rz)
-		remeshRegion(rx to rz - 1)
-		remeshRegion(rx to rz + 1)
+		for (drx in -1..1) {
+			for (drz in -1..1) {
+				if (drx == 0 && drz == 0) continue
+				remeshRegion(rx + drx to rz + drz)
+			}
+		}
 	}
 }

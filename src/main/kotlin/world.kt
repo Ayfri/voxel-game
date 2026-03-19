@@ -160,8 +160,8 @@ data class World(var config: WorldConfig) {
 
 		// Selector noise to choose between biomes (plains vs mountains)
 		val selector = Noise.fractal(
-			tx / 1200.0,
-			tz / 1200.0,
+			tx / 800.0,
+			tz / 800.0,
 			octaves = 2
 		) * 0.5 + 0.5 // Range [0.0, 1.0]
 

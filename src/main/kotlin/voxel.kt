@@ -78,12 +78,31 @@ suspend fun generateRegionMesh(
 	rz: Int
 ): Mesh<*>? {
 	val chunkSize = world.config.chunkSize
-	val regionChunks = mutableListOf<Chunk>()
+	val worldHeight = world.config.worldHeight
 	val worldChunks = world.chunks
+	val minCx = rx * REGION_SIZE - 1
+	val maxCx = (rx + 1) * REGION_SIZE
+	val minCz = rz * REGION_SIZE - 1
+	val maxCz = (rz + 1) * REGION_SIZE
+	val cacheWidth = maxCx - minCx + 1
+	val cacheDepth = maxCz - minCz + 1
+	val chunkCache = arrayOfNulls<Chunk>(cacheWidth * worldHeight * cacheDepth)
+
+	for (cx in minCx..maxCx) {
+		for (cz in minCz..maxCz) {
+			for (cy in 0 until worldHeight) {
+				worldChunks[Vec3i(cx, cy, cz)]?.let {
+					chunkCache[((cx - minCx) * worldHeight + cy) * cacheDepth + (cz - minCz)] = it
+				}
+			}
+		}
+	}
+
+	val regionChunks = mutableListOf<Chunk>()
 	for (cx in rx * REGION_SIZE until (rx + 1) * REGION_SIZE) {
 		for (cz in rz * REGION_SIZE until (rz + 1) * REGION_SIZE) {
-			for (cy in 0 until world.config.worldHeight) {
-				worldChunks[Vec3i(cx, cy, cz)]?.let { regionChunks.add(it) }
+			for (cy in 0 until worldHeight) {
+				chunkCache[((cx - minCx) * worldHeight + cy) * cacheDepth + (cz - minCz)]?.let { regionChunks.add(it) }
 			}
 		}
 	}
@@ -114,6 +133,18 @@ suspend fun generateRegionMesh(
 
 		// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
 		for (d in 0..5) {
+			val blockTexIndices = IntArray(BLOCKS.size) { blockId ->
+				val block = BLOCKS[blockId]
+				val texName = when (d) {
+					0, 1 -> block.xSideTexture
+					2 -> block.topTexture
+					3 -> block.bottomTexture
+					4, 5 -> block.zSideTexture
+					else -> ""
+				}
+				TEXTURE_INDEX_MAP[texName] ?: 0
+			}
+
 			val axis = d / 2
 			val isBackFace = d % 2 == 1
 
@@ -121,11 +152,13 @@ suspend fun generateRegionMesh(
 			val dy = if (axis == 1) (if (isBackFace) -1 else 1) else 0
 			val dz = if (axis == 2) (if (isBackFace) -1 else 1) else 0
 
-			val neighborChunk = worldChunks[Vec3i(
-				chunk.cx + dx,
-				chunk.cy + dy,
-				chunk.cz + dz
-			)]
+			val ncx = chunk.cx + dx - minCx
+			val ncy = chunk.cy + dy
+			val ncz = chunk.cz + dz - minCz
+			val neighborChunk =
+				if (ncy in 0 until worldHeight && ncx in 0 until cacheWidth && ncz in 0 until cacheDepth) {
+					chunkCache[(ncx * worldHeight + ncy) * cacheDepth + ncz]
+				} else null
 
 			for (slice in 0 until chunkSize) {
 				mask.fill(-1)
@@ -134,20 +167,15 @@ suspend fun generateRegionMesh(
 				for (j in 0 until chunkSize) {
 					val rowOffset = j * chunkSize
 					for (i in 0 until chunkSize) {
-						val lx = when (axis) {
-							0 -> slice
-							1 -> j
-							else -> i
-						}
-						val ly = when (axis) {
-							0 -> i
-							1 -> slice
-							else -> j
-						}
-						val lz = when (axis) {
-							0 -> j
-							1 -> i
-							else -> slice
+						val lx: Int
+						val ly: Int
+						val lz: Int
+						if (axis == 0) {
+							lx = slice; ly = i; lz = j
+						} else if (axis == 1) {
+							lx = j; ly = slice; lz = i
+						} else {
+							lx = i; ly = j; lz = slice
 						}
 
 						val blockId = chunk.getBlock(lx, ly, lz)
@@ -166,27 +194,14 @@ suspend fun generateRegionMesh(
 										val nnlz = (nlz + chunkSize) % chunkSize
 										neighborChunk.getBlock(nnlx, nnly, nnlz) == -1
 									} else {
-										// On affiche la face si on est au bord du monde (limite X/Z ou Y) ou si c'est une face verticale (Y)
-										// Cela évite les trous dans le sol tout en cachant les murs de pierre sur les côtés des régions en cours de chargement.
-										val gcx = chunk.cx + dx
-										val gcy = chunk.cy + dy
-										val gcz = chunk.cz + dz
-										val limit = WORLD_LIMIT_CHUNKS
-										val height = world.config.worldHeight
-										gcx < -limit || gcx >= limit || gcz < -limit || gcz >= limit || gcy < 0 || gcy >= height || dy != 0
+										// If neighbor chunk is missing, show the face to avoid holes at loaded region boundaries.
+										// This face will be properly culled when the neighbor region is loaded and remeshes this one.
+										true
 									}
 								}
 
 							if (isVisible) {
-								val block = BLOCKS[blockId]
-								val texName = when (d) {
-									0, 1 -> block.xSideTexture
-									2 -> block.topTexture
-									3 -> block.bottomTexture
-									4, 5 -> block.zSideTexture
-									else -> ""
-								}
-								mask[i + rowOffset] = TEXTURE_INDEX_MAP[texName] ?: 0
+								mask[i + rowOffset] = blockTexIndices[blockId]
 							}
 						}
 					}
