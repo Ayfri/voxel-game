@@ -1,6 +1,6 @@
 
 import de.fabmax.kool.math.Vec3i
-import kotlinx.coroutines.yield
+import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
@@ -93,38 +93,53 @@ data class Chunk(
 data class World(var config: WorldConfig) {
 	// Map keyed by chunk coordinates (cx, cy, cz).
 	val chunks = ConcurrentHashMap<Vec3i, Chunk>()
-	private val generatingColumns = ConcurrentHashMap.newKeySet<Pair<Int, Int>>()
+	private val generatingColumns = ConcurrentHashMap<Pair<Int, Int>, Deferred<Unit>>()
 	var isGenerating = false
 
 	fun isColumnGenerated(cx: Int, cz: Int): Boolean {
 		if (!isWithinWorldLimitChunks(cx, cz)) return false
-		return chunks.containsKey(Vec3i(cx, 0, cz))
+		// Vérification de tous les chunks de la colonne pour s'assurer qu'elle est complète dans la map
+		for (cy in 0 until config.worldHeight) {
+			if (!chunks.containsKey(Vec3i(cx, cy, cz))) return false
+		}
+		return true
 	}
 
 	suspend fun generateColumn(cx: Int, cz: Int, onColumnGenerated: suspend (Int, Int) -> Unit = { _, _ -> }) {
 		if (!isWithinWorldLimitChunks(cx, cz)) return
-		if (generatingColumns.contains(cx to cz)) return
-		generatingColumns.add(cx to cz)
-		
-		val seaLevel = (config.worldHeight * config.chunkSize) / 2
-		val chunkSize = config.chunkSize
-		val columnSurfaces = IntArray(chunkSize * chunkSize)
-		val startX = cx * chunkSize
-		val startZ = cz * chunkSize
 
-		for (lx in 0 until chunkSize) {
-			for (lz in 0 until chunkSize) {
-				columnSurfaces[lx * chunkSize + lz] = calculateSurfaceY(startX + lx, startZ + lz, seaLevel)
+		val key = cx to cz
+		val deferred = generatingColumns.getOrPut(key) {
+			CoroutineScope(Dispatchers.Default).async {
+				val seaLevel = (config.worldHeight * config.chunkSize) / 2
+				val chunkSize = config.chunkSize
+				val columnSurfaces = IntArray(chunkSize * chunkSize)
+				val startX = cx * chunkSize
+				val startZ = cz * chunkSize
+
+				for (lx in 0 until chunkSize) {
+					for (lz in 0 until chunkSize) {
+						columnSurfaces[lx * chunkSize + lz] = calculateSurfaceY(startX + lx, startZ + lz, seaLevel)
+					}
+				}
+
+				val newChunks = mutableMapOf<Vec3i, Chunk>()
+				for (cy in 0..<config.worldHeight) {
+					val chunk = Chunk(config, cx, cy, cz)
+					chunk.generateFromSurface(columnSurfaces)
+					newChunks[Vec3i(cx, cy, cz)] = chunk
+				}
+				chunks.putAll(newChunks)
 			}
 		}
 
-		for (cy in 0..<config.worldHeight) {
-			val chunk = Chunk(config, cx, cy, cz)
-			chunk.generateFromSurface(columnSurfaces)
-			chunks[Vec3i(cx, cy, cz)] = chunk
-		}
+		deferred.await()
 
-		generatingColumns.remove(cx to cz)
+		// Un seul gagne pour le remove, mais c'est pas grave
+		if (generatingColumns[key] == deferred) {
+			generatingColumns.remove(key)
+		}
+		
 		onColumnGenerated(cx, cz)
 	}
 

@@ -1,9 +1,11 @@
+
 import de.fabmax.kool.math.deg
 import de.fabmax.kool.modules.ksl.KslShader
 import de.fabmax.kool.scene.Mesh
 import de.fabmax.kool.scene.Node
 import de.fabmax.kool.util.BackendScope
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -27,8 +29,10 @@ class WorldManager(
 	val incrementalMeshes = ConcurrentLinkedQueue<Mesh<*>>()
 	val isRefreshing = AtomicBoolean(false)
 	val loadingRegions = ConcurrentHashMap.newKeySet<Pair<Int, Int>>()
+	val meshingRegions = ConcurrentHashMap.newKeySet<Pair<Int, Int>>()
 	val removedMeshes = ConcurrentLinkedQueue<Mesh<*>>()
 	val worldIsGenerated = AtomicBoolean(false)
+	private var worldScope = CoroutineScope(BackendScope.job)
 
 	fun refreshWorldMesh(regenerateWorld: Boolean = false) {
 		if (isRefreshing.get()) return
@@ -39,6 +43,9 @@ class WorldManager(
 
 		if (regenerateWorld) {
 			player.physicsEnabled = false
+			player.isNoclip = true
+			worldScope.cancel()
+			worldScope = CoroutineScope(BackendScope.job)
 			activeRegions.clear()
 			loadingRegions.clear()
 			incrementalMeshes.clear()
@@ -49,7 +56,7 @@ class WorldManager(
 		}
 
 		if (!worldIsGenerated.get()) {
-			CoroutineScope(BackendScope.job).launch {
+			worldScope.launch {
 				// Initial generation around player
 				val chunkSize = world.config.chunkSize
 				val playerCX = floor(player.position.x / chunkSize).toInt()
@@ -91,11 +98,12 @@ class WorldManager(
 
 						val mesh = generateRegionMesh(world, shader, rx, rz)
 						if (mesh != null) {
-							activeRegions[rCoord] = mesh
+							activeRegions.put(rCoord, mesh)?.let { removedMeshes.add(it) }
 							incrementalMeshes.add(mesh)
 							if (firstColumnGenerated.compareAndSet(false, true)) {
 								earlyRespawnRequested.set(true)
 							}
+							triggerNeighborRemesh(rx, rz)
 						}
 						loadingRegions.remove(rCoord)
 					}
@@ -179,7 +187,7 @@ class WorldManager(
 				val rx = rCoord.first
 				val rz = rCoord.second
 				if (loadingRegions.add(rCoord)) {
-					CoroutineScope(BackendScope.job).launch {
+					worldScope.launch {
 						for (lcx in 0 until REGION_SIZE) {
 							for (lcz in 0 until REGION_SIZE) {
 								val gcx = rx * REGION_SIZE + lcx
@@ -194,8 +202,9 @@ class WorldManager(
 						}
 						val mesh = generateRegionMesh(world, shader, rx, rz)
 						if (mesh != null) {
-							activeRegions[rCoord] = mesh
+							activeRegions.put(rCoord, mesh)?.let { removedMeshes.add(it) }
 							incrementalMeshes.add(mesh)
+							triggerNeighborRemesh(rx, rz)
 						}
 						loadingRegions.remove(rCoord)
 					}
@@ -231,5 +240,30 @@ class WorldManager(
 		val limitChunks = WORLD_LIMIT_CHUNKS
 		return cx >= -limitChunks && cx < limitChunks &&
 			cz >= -limitChunks && cz < limitChunks
+	}
+
+	private fun remeshRegion(rCoord: Pair<Int, Int>) {
+		if (!activeRegions.containsKey(rCoord)) return
+		val shader = voxelShader.get() ?: return
+		if (meshingRegions.add(rCoord)) {
+			worldScope.launch {
+				try {
+					val mesh = generateRegionMesh(world, shader, rCoord.first, rCoord.second)
+					if (mesh != null) {
+						activeRegions.put(rCoord, mesh)?.let { removedMeshes.add(it) }
+						incrementalMeshes.add(mesh)
+					}
+				} finally {
+					meshingRegions.remove(rCoord)
+				}
+			}
+		}
+	}
+
+	private fun triggerNeighborRemesh(rx: Int, rz: Int) {
+		remeshRegion(rx - 1 to rz)
+		remeshRegion(rx + 1 to rz)
+		remeshRegion(rx to rz - 1)
+		remeshRegion(rx to rz + 1)
 	}
 }

@@ -14,10 +14,7 @@ import de.fabmax.kool.scene.geometry.MeshBuilder
 import de.fabmax.kool.util.Color
 import de.fabmax.kool.util.MemoryLayout
 import de.fabmax.kool.util.Struct
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 
 val ATTRIBUTE_TEX_INDEX = Attribute("aTexIndex", GpuType.Float1)
 
@@ -74,7 +71,7 @@ suspend fun generateWorldMeshes(
  * Generates a mesh for a region of columns at (rx, rz).
  */
 @OptIn(ExperimentalUnsignedTypes::class)
-fun generateRegionMesh(
+suspend fun generateRegionMesh(
 	world: World,
 	voxelShader: KslShader,
 	rx: Int,
@@ -96,7 +93,7 @@ fun generateRegionMesh(
 	val mesh = Mesh(VOXEL_LAYOUT)
 	mesh.shader = voxelShader
 	mesh.isFrustumChecked = true
-	val mask = getMask(chunkSize)
+	val mask = IntArray(chunkSize * chunkSize)
 	val n = MutableVec3f()
 	val p0 = MutableVec3f()
 	val p1 = MutableVec3f()
@@ -106,135 +103,148 @@ fun generateRegionMesh(
 	val uv1 = MutableVec2f()
 	val uv2 = MutableVec2f()
 	val uv3 = MutableVec2f()
-	mesh.generate {
-		regionChunks.forEach { chunk ->
-			if (chunk.isEmpty) return@forEach
 
-			// Greedy meshing algorithm implementation
+	// Use a single MeshBuilder and iterate chunks with yield for cancellation
+	val builder = MeshBuilder(mesh.geometry)
+	regionChunks.forEach { chunk ->
+		yield()
+		if (chunk.isEmpty) return@forEach
 
-			// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
-			for (d in 0..5) {
-				val axis = d / 2
-				val isBackFace = d % 2 == 1
+		// Greedy meshing algorithm implementation
 
-				val dx = if (axis == 0) (if (isBackFace) -1 else 1) else 0
-				val dy = if (axis == 1) (if (isBackFace) -1 else 1) else 0
-				val dz = if (axis == 2) (if (isBackFace) -1 else 1) else 0
+		// Iterate through all 6 directions (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
+		for (d in 0..5) {
+			val axis = d / 2
+			val isBackFace = d % 2 == 1
 
-				val neighborChunk = worldChunks[Vec3i(
-					chunk.cx + dx,
-					chunk.cy + dy,
-					chunk.cz + dz
-				)]
+			val dx = if (axis == 0) (if (isBackFace) -1 else 1) else 0
+			val dy = if (axis == 1) (if (isBackFace) -1 else 1) else 0
+			val dz = if (axis == 2) (if (isBackFace) -1 else 1) else 0
 
-				for (slice in 0 until chunkSize) {
-					mask.fill(-1)
+			val neighborChunk = worldChunks[Vec3i(
+				chunk.cx + dx,
+				chunk.cy + dy,
+				chunk.cz + dz
+			)]
 
-					// 1. Fill visibility mask for this slice
-					for (j in 0 until chunkSize) {
-						val rowOffset = j * chunkSize
-						for (i in 0 until chunkSize) {
-							val lx = when (axis) {
-								0 -> slice
-								1 -> j
-								else -> i
-							}
-							val ly = when (axis) {
-								0 -> i
-								1 -> slice
-								else -> j
-							}
-							val lz = when (axis) {
-								0 -> j
-								1 -> i
-								else -> slice
-							}
+			for (slice in 0 until chunkSize) {
+				mask.fill(-1)
 
-							val blockId = chunk.getBlock(lx, ly, lz)
-							if (blockId != -1) {
-								val nlx = lx + dx
-								val nly = ly + dy
-								val nlz = lz + dz
+				// 1. Fill visibility mask for this slice
+				for (j in 0 until chunkSize) {
+					val rowOffset = j * chunkSize
+					for (i in 0 until chunkSize) {
+						val lx = when (axis) {
+							0 -> slice
+							1 -> j
+							else -> i
+						}
+						val ly = when (axis) {
+							0 -> i
+							1 -> slice
+							else -> j
+						}
+						val lz = when (axis) {
+							0 -> j
+							1 -> i
+							else -> slice
+						}
 
-								val isVisible =
-									if (nlx in 0 until chunkSize && nly in 0 until chunkSize && nlz in 0 until chunkSize) {
-										chunk.getBlock(nlx, nly, nlz) == -1
+						val blockId = chunk.getBlock(lx, ly, lz)
+						if (blockId != -1) {
+							val nlx = lx + dx
+							val nly = ly + dy
+							val nlz = lz + dz
+
+							val isVisible =
+								if (nlx in 0 until chunkSize && nly in 0 until chunkSize && nlz in 0 until chunkSize) {
+									chunk.getBlock(nlx, nly, nlz) == -1
 								} else {
+									if (neighborChunk != null) {
 										val nnlx = (nlx + chunkSize) % chunkSize
 										val nnly = (nly + chunkSize) % chunkSize
 										val nnlz = (nlz + chunkSize) % chunkSize
-										(neighborChunk?.getBlock(nnlx, nnly, nnlz) ?: -1) == -1
+										neighborChunk.getBlock(nnlx, nnly, nnlz) == -1
+									} else {
+										// On affiche la face si on est au bord du monde (limite X/Z ou Y) ou si c'est une face verticale (Y)
+										// Cela évite les trous dans le sol tout en cachant les murs de pierre sur les côtés des régions en cours de chargement.
+										val gcx = chunk.cx + dx
+										val gcy = chunk.cy + dy
+										val gcz = chunk.cz + dz
+										val limit = WORLD_LIMIT_CHUNKS
+										val height = world.config.worldHeight
+										gcx < -limit || gcx >= limit || gcz < -limit || gcz >= limit || gcy < 0 || gcy >= height || dy != 0
+									}
 								}
 
-								if (isVisible) {
-									val block = BLOCKS[blockId]
-									val texName = when (d) {
-										0, 1 -> block.xSideTexture
-										2 -> block.topTexture
-										3 -> block.bottomTexture
-										4, 5 -> block.zSideTexture
-										else -> ""
-									}
-									mask[i + rowOffset] = TEXTURE_INDEX_MAP[texName] ?: 0
+							if (isVisible) {
+								val block = BLOCKS[blockId]
+								val texName = when (d) {
+									0, 1 -> block.xSideTexture
+									2 -> block.topTexture
+									3 -> block.bottomTexture
+									4, 5 -> block.zSideTexture
+									else -> ""
 								}
+								mask[i + rowOffset] = TEXTURE_INDEX_MAP[texName] ?: 0
 							}
 						}
 					}
+				}
 
-					// 2. Perform greedy merging on the mask
-					for (j in 0 until chunkSize) {
-						var i = 0
-						while (i < chunkSize) {
-							val texIndex = mask[j * chunkSize + i]
-							if (texIndex != -1) {
-								// Find max width
-								var w = 1
-								while (i + w < chunkSize && mask[j * chunkSize + i + w] == texIndex) {
-									w++
-								}
-
-								// Find max height for this width
-								var h = 1
-								outer@ while (j + h < chunkSize) {
-									val nextRowOffset = (j + h) * chunkSize
-									for (w_idx in 0 until w) {
-										if (mask[nextRowOffset + i + w_idx] != texIndex) break@outer
-									}
-									h++
-								}
-
-								// Generate the merged quad
-								addGreedyFace(
-									d,
-									slice,
-									i,
-									j,
-									w,
-									h,
-									texIndex,
-									chunk,
-									p0,
-									p1,
-									p2,
-									p3,
-									n,
-									uv0,
-									uv1,
-									uv2,
-									uv3
-								)
-
-								// Mark merged faces as processed
-								for (h_idx in 0 until h) {
-									val markRowOffset = (j + h_idx) * chunkSize
-									for (w_idx in 0 until w) {
-										mask[markRowOffset + i + w_idx] = -1
-									}
-								}
-								i += w
-							} else {
-								i++
+				// 2. Perform greedy merging on the mask
+				for (j in 0 until chunkSize) {
+					var i = 0
+					while (i < chunkSize) {
+						val texIndex = mask[j * chunkSize + i]
+						if (texIndex != -1) {
+							// Find max width
+							var w = 1
+							while (i + w < chunkSize && mask[j * chunkSize + i + w] == texIndex) {
+								w++
 							}
+
+							// Find max height for this width
+							var h = 1
+							outer@ while (j + h < chunkSize) {
+								val nextRowOffset = (j + h) * chunkSize
+								for (w_idx in 0 until w) {
+									if (mask[nextRowOffset + i + w_idx] != texIndex) break@outer
+								}
+								h++
+							}
+
+							// Generate the merged quad
+							builder.addGreedyFace(
+								d,
+								slice,
+								i,
+								j,
+								w,
+								h,
+								texIndex,
+								chunk,
+								p0,
+								p1,
+								p2,
+								p3,
+								n,
+								uv0,
+								uv1,
+								uv2,
+								uv3
+							)
+
+							// Mark merged faces as processed
+							for (h_idx in 0 until h) {
+								val markRowOffset = (j + h_idx) * chunkSize
+								for (w_idx in 0 until w) {
+									mask[markRowOffset + i + w_idx] = -1
+								}
+							}
+							i += w
+						} else {
+							i++
 						}
 					}
 				}
@@ -403,20 +413,4 @@ fun createVoxelShader(): KslShader {
 		cullMethod = CullMethod.CULL_BACK_FACES
 	)
 	return shader
-}
-
-private val maskThreadLocal = ThreadLocal<IntArray>()
-
-/**
- * Gets a cached IntArray from ThreadLocal or creates a new one if it doesn't exist.
- * The array is guaranteed to be at least as large as chunkSize * chunkSize.
- */
-private fun getMask(chunkSize: Int): IntArray {
-	val size = chunkSize * chunkSize
-	var mask = maskThreadLocal.get()
-	if (mask == null || mask.size < size) {
-		mask = IntArray(size)
-		maskThreadLocal.set(mask)
-	}
-	return mask
 }
