@@ -6,6 +6,9 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
+const val NOCLIP_MIN_SPEED = 1f
+const val NOCLIP_MAX_SPEED = 1000f
+
 class PlayerControls(
 	val player: Player,
 	val camera: PerspectiveCamera,
@@ -87,7 +90,7 @@ class PlayerControls(
 		// Noclip speed adjustments
 		val scroll = PointerInput.primaryPointer.scroll.y
 		if (scroll != 0f) {
-			player.noclipSpeed = (player.noclipSpeed + scroll * 2f).coerceIn(1f, 400f)
+			player.noclipSpeed = (player.noclipSpeed + scroll * 2f).coerceIn(NOCLIP_MIN_SPEED, NOCLIP_MAX_SPEED)
 		}
 	}
 
