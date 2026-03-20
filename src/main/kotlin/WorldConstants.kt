@@ -1,3 +1,3 @@
 const val REGION_SIZE = 8
-const val WORLD_LIMIT = 67_108_864
-const val WORLD_LIMIT_CHUNKS = WORLD_LIMIT / 16
+const val WORLD_BOUNDARY = 67_108_864
+const val WORLD_HEIGHT_MAX = 256

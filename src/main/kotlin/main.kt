@@ -34,6 +34,7 @@ fun main() = KoolApplication(
 		clearColor = ClearColorFill(BACKGROUND)
 
 		addNode(worldNode)
+		addNode(worldManager.previewNode)
 
 		onUpdate += {
 			worldManager.update(Time.deltaT)
@@ -50,6 +51,14 @@ fun main() = KoolApplication(
 				uniform1f("uNumLayers", loadedTex.depth.toFloat())
 			}
 			voxelShader.set(shader)
+
+			val pShader = createVoxelShader(isTransparent = true).apply {
+				texture3d("tBlockArray", loadedTex)
+				uniform1f("uNumLayers", loadedTex.depth.toFloat())
+				uniform1f("uAlphaMult", 0.5f)
+				uniform1f("uBrightness", 1.2f)
+			}
+			worldManager.previewShader.set(pShader)
 
 			hud.loadResources()
 

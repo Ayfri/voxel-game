@@ -15,7 +15,7 @@ data class WorldConfig(
 	val renderDistance: Int = 12,
 	val seed: Long = Random.nextLong(),
 	val stoneBlockId: Int = 2,
-	val worldHeight: Int = 16,
+	val worldHeight: Int = WORLD_HEIGHT_MAX / 16,
 ) {
 	constructor(width: Int, height: Int, seed: Long = Random.nextLong()) : this(
 		worldHeight = height,
@@ -269,11 +269,16 @@ data class World(var config: WorldConfig) {
 		return maxY
 	}
 
-	private fun isWithinWorldLimit(x: Int, z: Int): Boolean {
-		return true
+	fun isWithinWorldLimit(x: Int, y: Int, z: Int): Boolean {
+		return x >= -WORLD_BOUNDARY && x < WORLD_BOUNDARY &&
+			y >= 0 && y < WORLD_HEIGHT_MAX &&
+			z >= -WORLD_BOUNDARY && z < WORLD_BOUNDARY
 	}
 
-	private fun isWithinWorldLimitChunks(cx: Int, cz: Int): Boolean {
-		return true
+	fun isWithinWorldLimitChunks(cx: Int, cz: Int): Boolean {
+		val startX = cx * config.chunkSize
+		val startZ = cz * config.chunkSize
+		return startX >= -WORLD_BOUNDARY && startX < WORLD_BOUNDARY &&
+			startZ >= -WORLD_BOUNDARY && startZ < WORLD_BOUNDARY
 	}
 }

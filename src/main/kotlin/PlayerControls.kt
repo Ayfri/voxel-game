@@ -21,6 +21,8 @@ class PlayerControls(
 		setupKeyListeners()
 	}
 
+	private var raycastResult: RaycastResult? = null
+
 	private fun setupKeyListeners() {
 		// Register player movement keys
 		Player.Controls.allMovement.flatMap {
@@ -56,6 +58,17 @@ class PlayerControls(
 				player.isNoclip = !player.isNoclip
 			}
 		}
+
+		// Block selection
+		keyListeners += KeyboardInput.addKeyListener(UniversalKeyCode('1'), "Select Grass") {
+			if (it.isPressed) player.selectedBlockId = 0
+		}
+		keyListeners += KeyboardInput.addKeyListener(UniversalKeyCode('2'), "Select Dirt") {
+			if (it.isPressed) player.selectedBlockId = 1
+		}
+		keyListeners += KeyboardInput.addKeyListener(UniversalKeyCode('3'), "Select Stone") {
+			if (it.isPressed) player.selectedBlockId = 2
+		}
 	}
 
 	fun update(dt: Float) {
@@ -66,6 +79,9 @@ class PlayerControls(
 			player.pitch += PointerInput.primaryPointer.delta.y * lookSensitivity
 			player.pitch = player.pitch.coerceIn(-89.9f, 89.9f)
 		}
+
+		val isLmbClicked = PointerInput.primaryPointer.isLeftButtonClicked
+		val isRmbClicked = PointerInput.primaryPointer.isRightButtonClicked
 
 		if (PointerInput.primaryPointer.isLeftButtonDown || PointerInput.primaryPointer.isRightButtonDown || PointerInput.primaryPointer.isMiddleButtonDown) {
 			PointerInput.cursorMode = CursorMode.LOCKED
@@ -86,6 +102,27 @@ class PlayerControls(
 		)
 
 		camera.lookAt.set(camera.position).add(lookDir)
+
+		// Raycast for block interaction
+		raycastResult = raycast(world, camera.position, lookDir, 10f)
+
+		if (PointerInput.cursorMode == CursorMode.LOCKED) {
+			if (isLmbClicked) {
+				raycastResult?.let {
+					worldManager.setBlock(it.blockPos.x, it.blockPos.y, it.blockPos.z, -1)
+				}
+			} else if (isRmbClicked) {
+				raycastResult?.let {
+					val placePos = it.blockPos + it.face
+					if (!player.intersectsBlock(placePos.x, placePos.y, placePos.z)) {
+						worldManager.setBlock(placePos.x, placePos.y, placePos.z, player.selectedBlockId)
+					}
+				}
+			}
+		}
+
+		// Update preview
+		worldManager.updatePreview(raycastResult, player.selectedBlockId)
 
 		// Noclip speed adjustments
 		val scroll = PointerInput.primaryPointer.scroll.y

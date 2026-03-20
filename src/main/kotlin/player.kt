@@ -18,6 +18,7 @@ class Player(val world: World) {
 	var isNoclip = false
 	val jumpSpeed = 16f
 	var noclipSpeed = 20f
+	var selectedBlockId = 0
 	var onGround = false
 	var physicsEnabled = false
 	var pitch = 0f
@@ -232,5 +233,18 @@ class Player(val world: World) {
 			}
 		}
 		return false
+	}
+
+	fun intersectsBlock(bx: Int, by: Int, bz: Int): Boolean {
+		val xMin = position.x - width / 2f
+		val xMax = position.x + width / 2f
+		val yMin = position.y
+		val yMax = position.y + height
+		val zMin = position.z - depth / 2f
+		val zMax = position.z + depth / 2f
+
+		return xMin < bx + 1f && xMax > bx &&
+			yMin < by + 1f && yMax > by &&
+			zMin < bz + 1f && zMax > bz
 	}
 }

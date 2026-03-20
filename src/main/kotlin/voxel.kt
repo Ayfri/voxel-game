@@ -436,7 +436,7 @@ private fun MeshBuilder<VoxelLayout>.addFace(
 /**
  * Creates the KSL shader for rendering the voxel world using a 3D texture array.
  */
-fun createVoxelShader(): KslShader {
+fun createVoxelShader(isTransparent: Boolean = false): KslShader {
 	val shader = KslShader("VoxelArrayShader") {
 		val uv = interStageFloat2("uv")
 		val vColor = interStageFloat4("vColor")
@@ -457,20 +457,28 @@ fun createVoxelShader(): KslShader {
 		fragmentStage {
 			val tex = texture3d("tBlockArray")
 			val uNumLayers = uniformFloat1("uNumLayers")
+			val uAlphaMult = if (isTransparent) uniformFloat1("uAlphaMult") else null
+			val uBrightness = if (isTransparent) uniformFloat1("uBrightness") else null
+
 			main {
+				val alphaMult = uAlphaMult ?: 1f.const
+				val brightness = uBrightness ?: 1f.const
+
 				val sampleCoords = float3Value(
 					uv.output.x,
 					uv.output.y,
 					(texIndex.output + 0.5f.const) / uNumLayers
 				)
-				colorOutput(sampleTexture(tex, sampleCoords) * vColor.output)
+				val baseColor = sampleTexture(tex, sampleCoords) * vColor.output
+				colorOutput(float4Value(baseColor.rgb * brightness, baseColor.a * alphaMult))
 			}
 		}
 	}
 	// Configure pipeline for correct voxel rendering.
 	shader.pipelineConfig = shader.pipelineConfig.copy(
-		depthTest = DepthCompareOp.LESS,
-		cullMethod = CullMethod.CULL_BACK_FACES
+		depthTest = DepthCompareOp.LESS_EQUAL,
+		cullMethod = CullMethod.CULL_BACK_FACES,
+		isWriteDepth = !isTransparent
 	)
 	return shader
 }
